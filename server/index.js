@@ -10,6 +10,29 @@ const port = process.env.PORT || 3000;
 // In-memory store for job status and results (keyed by filename)
 const jobs = new Map();
 
+// Restore jobs from existing .json result files on startup
+function restoreJobs() {
+  if (!fs.existsSync(uploadDir)) return;
+  const files = fs.readdirSync(uploadDir).filter((f) => f.endsWith('.json'));
+  for (const jsonFile of files) {
+    const videoFile = jsonFile.replace(/\.json$/, '');
+    const videoPath = path.join(uploadDir, videoFile);
+    if (!fs.existsSync(videoPath)) continue;
+    try {
+      const raw = fs.readFileSync(path.join(uploadDir, jsonFile), 'utf-8');
+      const data = JSON.parse(raw);
+      const highlights = Array.isArray(data.highlights) ? data.highlights : [];
+      jobs.set(videoFile, {
+        id: videoFile,
+        status: 'done',
+        highlights,
+      });
+    } catch {
+      // skip corrupt files
+    }
+  }
+}
+
 // Path to the ML script
 const ML_SCRIPT = path.resolve(__dirname, '..', 'ml', 'highlight_detector.py');
 const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
@@ -19,6 +42,8 @@ const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
+
+restoreJobs();
 
 // Configure multer for file upload
 const storage = multer.diskStorage({
@@ -144,6 +169,7 @@ function runMLPipeline(filename, videoPath, resultPath) {
 // Expose for testing
 app._jobs = jobs;
 app._runMLPipeline = runMLPipeline;
+app._restoreJobs = restoreJobs;
 
 // List uploaded videos with processing status
 app.get('/uploads', (req, res) => {
@@ -170,6 +196,63 @@ app.get('/results/:id', (req, res) => {
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
+});
+
+// Stream video file with Range support for seeking
+app.get('/video/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const filePath = path.join(uploadDir, filename);
+
+  if (!fs.existsSync(filePath) || filename.endsWith('.json')) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  // Determine MIME type from file extension
+  const extMap = { '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.avi': 'video/x-msvideo', '.webm': 'video/webm', '.mkv': 'video/x-matroska' };
+  const contentType = extMap[path.extname(filename).toLowerCase()] || 'application/octet-stream';
+
+  if (range) {
+    const rangeMatch = /^bytes=(\d*)-(\d*)$/.exec(range);
+
+    if (!rangeMatch || !rangeMatch[1]) {
+      return res.status(416).json({ message: 'Requested Range Not Satisfiable' });
+    }
+
+    const start = Number(rangeMatch[1]);
+    let end = rangeMatch[2] ? Number(rangeMatch[2]) : fileSize - 1;
+
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return res.status(416).json({ message: 'Requested Range Not Satisfiable' });
+    }
+
+    if (end > fileSize - 1) {
+      end = fileSize - 1;
+    }
+
+    if (start < 0 || start > end || start >= fileSize) {
+      return res.status(416).json({ message: 'Requested Range Not Satisfiable' });
+    }
+
+    const chunkSize = end - start + 1;
+
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunkSize,
+      'Content-Type': contentType,
+    });
+    fs.createReadStream(filePath, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, {
+      'Content-Length': fileSize,
+      'Content-Type': contentType,
+    });
+    fs.createReadStream(filePath).pipe(res);
+  }
 });
 
 // Error-handling middleware
