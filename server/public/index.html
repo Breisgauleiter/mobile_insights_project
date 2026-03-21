@@ -239,6 +239,29 @@
       padding: 24px 0;
       font-size: 14px;
     }
+
+    /* Video player */
+    .video-wrap {
+      margin-bottom: 16px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #000;
+    }
+
+    .video-wrap video {
+      width: 100%;
+      display: block;
+      max-height: 400px;
+    }
+
+    .highlight-card {
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .highlight-card:hover {
+      background: #1a1a2e;
+    }
   </style>
 </head>
 <body>
@@ -265,6 +288,9 @@
     <div class="results-panel" id="resultsPanel">
       <button class="close-btn" id="closeResults">&times;</button>
       <h3 id="resultsTitle">Results</h3>
+      <div class="video-wrap" id="videoWrap" style="display:none">
+        <video id="videoPlayer" controls preload="metadata"></video>
+      </div>
       <div id="resultsContent"></div>
     </div>
 
@@ -286,8 +312,11 @@
     const resultsTitle = document.getElementById('resultsTitle');
     const resultsContent = document.getElementById('resultsContent');
     const closeResults = document.getElementById('closeResults');
+    const videoWrap = document.getElementById('videoWrap');
+    const videoPlayer = document.getElementById('videoPlayer');
 
     let pollTimer = null;
+    let currentVideoId = null;
 
     // Drag & drop
     uploadZone.addEventListener('click', () => fileInput.click());
@@ -437,6 +466,13 @@
       resultsTitle.textContent = id;
       resultsContent.innerHTML = '<div class="status-msg">Loading...</div>';
 
+      // Load video player
+      if (currentVideoId !== id) {
+        currentVideoId = id;
+        videoPlayer.src = '/video/' + encodeURIComponent(id);
+        videoWrap.style.display = 'block';
+      }
+
       try {
         const res = await fetch('/results/' + encodeURIComponent(id));
         if (!res.ok) {
@@ -476,13 +512,25 @@
             const raw = typeof h.score === 'number' ? h.score : 0;
             const barWidth = maxScore > 0 ? Math.min(100, Math.max(0, (raw / maxScore) * 100)) : 0;
             return `
-          <div class="highlight-card">
+          <div class="highlight-card" data-time="${h.timestamp}">
             <div class="time">${formatTime(h.timestamp)}</div>
             <div class="score-bar"><div class="fill" style="width:${barWidth}%"></div></div>
             <div class="score-val">${raw}</div>
           </div>`;
           })
           .join('');
+
+        // Attach click handlers to seek video
+        resultsContent.querySelectorAll('.highlight-card[data-time]').forEach((card) => {
+          card.addEventListener('click', () => {
+            const time = parseFloat(card.getAttribute('data-time'));
+            if (!isNaN(time)) {
+              videoPlayer.currentTime = time;
+              videoPlayer.play();
+              videoWrap.scrollIntoView({ behavior: 'smooth' });
+            }
+          });
+        });
       } catch {
         resultsContent.innerHTML =
           '<div class="no-highlights">Failed to load results</div>';
@@ -491,6 +539,10 @@
 
     closeResults.addEventListener('click', () => {
       resultsPanel.classList.remove('active');
+      videoPlayer.pause();
+      videoWrap.style.display = 'none';
+      videoPlayer.src = '';
+      currentVideoId = null;
     });
 
     // Helpers

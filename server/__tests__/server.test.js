@@ -165,3 +165,44 @@ describe('ML Pipeline Integration', () => {
     expect(job.error).toBe('ML process failed');
   });
 });
+
+describe('GET /video/:filename', () => {
+  const testFile = 'video-stream-test.mp4';
+  const testContent = 'fake video content for streaming';
+
+  beforeAll(() => {
+    fs.writeFileSync(path.join(uploadsDir, testFile), testContent);
+  });
+
+  afterAll(() => {
+    const p = path.join(uploadsDir, testFile);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  });
+
+  it('should stream the full video file', async () => {
+    const res = await request(app).get(`/video/${testFile}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('video/mp4');
+    expect(res.headers['content-length']).toBe(String(testContent.length));
+  });
+
+  it('should support Range requests', async () => {
+    const res = await request(app)
+      .get(`/video/${testFile}`)
+      .set('Range', 'bytes=0-9');
+    expect(res.statusCode).toBe(206);
+    expect(res.headers['content-range']).toMatch(/^bytes 0-9\//);
+  });
+
+  it('should return 404 for nonexistent video', async () => {
+    const res = await request(app).get('/video/does-not-exist.mp4');
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('should block access to .json files', async () => {
+    fs.writeFileSync(path.join(uploadsDir, 'secret.json'), '{}');
+    const res = await request(app).get('/video/secret.json');
+    expect(res.statusCode).toBe(404);
+    fs.unlinkSync(path.join(uploadsDir, 'secret.json'));
+  });
+});
