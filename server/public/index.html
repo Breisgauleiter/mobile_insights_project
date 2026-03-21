@@ -117,6 +117,19 @@
 
     .uploads-list li:hover { background: #252545; }
 
+    .upload-btn {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      background: none;
+      border: none;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+      padding: 0;
+    }
+
     .uploads-list .name {
       font-size: 13px;
       color: #e0e0e0;
@@ -334,8 +347,18 @@
           loadUploads();
           startPolling();
         } else {
-          const data = JSON.parse(xhr.responseText);
-          progressText.textContent = 'Error: ' + (data.error || 'Upload failed');
+          let message = 'Upload failed';
+          if (xhr.responseText) {
+            try {
+              const data = JSON.parse(xhr.responseText);
+              if (data && typeof data.error === 'string' && data.error.trim()) {
+                message = data.error;
+              }
+            } catch (e) {
+              // fall back to generic message
+            }
+          }
+          progressText.textContent = 'Error: ' + message;
           progressFill.style.width = '0%';
         }
       });
@@ -379,12 +402,20 @@
       uploadsList.innerHTML = uploads
         .map(
           (u) => `
-        <li data-id="${esc(u.filename)}" onclick="showResults('${esc(u.filename)}')">
-          <span class="name">${esc(u.filename)}</span>
-          <span class="badge ${esc(u.status)}">${esc(u.status)}</span>
+        <li data-id="${esc(u.filename)}">
+          <button type="button" class="upload-btn">
+            <span class="name">${esc(u.filename)}</span>
+            <span class="badge ${esc(u.status)}">${esc(u.status)}</span>
+          </button>
         </li>`
         )
         .join('');
+
+      uploadsList.querySelectorAll('li[data-id]').forEach((item) => {
+        item.addEventListener('click', () => {
+          showResults(item.getAttribute('data-id'));
+        });
+      });
     }
 
     // Polling for active jobs
@@ -435,15 +466,22 @@
           return;
         }
 
-        resultsContent.innerHTML = data.highlights
-          .map(
-            (h) => `
+        const highlights = data.highlights;
+        const maxScore = highlights.reduce(
+          (max, h) => (typeof h.score === 'number' && h.score > max ? h.score : max), 0
+        );
+
+        resultsContent.innerHTML = highlights
+          .map((h) => {
+            const raw = typeof h.score === 'number' ? h.score : 0;
+            const barWidth = maxScore > 0 ? Math.min(100, Math.max(0, (raw / maxScore) * 100)) : 0;
+            return `
           <div class="highlight-card">
             <div class="time">${formatTime(h.timestamp)}</div>
-            <div class="score-bar"><div class="fill" style="width:${h.score}%"></div></div>
-            <div class="score-val">${h.score}</div>
-          </div>`
-          )
+            <div class="score-bar"><div class="fill" style="width:${barWidth}%"></div></div>
+            <div class="score-val">${raw}</div>
+          </div>`;
+          })
           .join('');
       } catch {
         resultsContent.innerHTML =
