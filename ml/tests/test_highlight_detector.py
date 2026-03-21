@@ -86,7 +86,7 @@ class TestDetectHighlights:
         )
         # With skip_frames, we process fewer frames so may find fewer or equal candidates
         assert isinstance(skipped, list)
-        assert len(skipped) <= len(full) or len(skipped) >= 0
+        assert len(skipped) <= len(full)
 
     def test_max_width_still_detects_flash(self, activity_video):
         results = highlight_detector.detect_highlights(

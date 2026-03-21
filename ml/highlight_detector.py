@@ -60,10 +60,9 @@ def detect_highlights(
         if not ret:
             break
 
-        frame_idx += 1
-
         # Skip frames for performance (still count them for correct timestamps)
         if step > 1 and frame_idx % step != 0:
+            frame_idx += 1
             continue
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -82,6 +81,7 @@ def detect_highlights(
                 candidates.append({"timestamp": timestamp, "score": round(score, 2)})
 
         prev_gray = gray
+        frame_idx += 1
 
     cap.release()
 

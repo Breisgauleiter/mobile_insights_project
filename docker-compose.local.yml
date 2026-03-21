@@ -1,4 +1,4 @@
-# Local dev overrides — NOT committed to prod
+# Local dev overrides — use with: docker compose -f docker-compose.yml -f docker-compose.local.yml up
 # ML performance tuning to prevent OOM on local Docker Desktop
 services:
   app:
