@@ -2,12 +2,17 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// In-memory store for highlight results (keyed by filename)
-const results = new Map();
+// In-memory store for job status and results (keyed by filename)
+const jobs = new Map();
+
+// Path to the ML script
+const ML_SCRIPT = path.resolve(__dirname, '..', 'ml', 'highlight_detector.py');
+const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
 
 // Create uploads directory if it doesn't exist
 const uploadDir = path.join(__dirname, 'uploads');
@@ -61,37 +66,102 @@ app.post('/upload', (req, res, next) => {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    // Store dummy highlight results for now
-    results.set(req.file.filename, {
-      id: req.file.filename,
-      status: 'processed',
-      highlights: [
-        { timestamp: 1.23, label: 'Kill', confidence: 0.95 },
-        { timestamp: 3.45, label: 'Objective', confidence: 0.87 },
-      ],
-    });
+    const filename = req.file.filename;
+    const videoPath = path.join(uploadDir, filename);
+    const resultPath = path.join(uploadDir, filename + '.json');
 
-    return res.status(201).json({ message: 'Upload successful', filename: req.file.filename });
+    // Set initial status
+    jobs.set(filename, { id: filename, status: 'pending', highlights: [] });
+
+    // Spawn ML pipeline asynchronously
+    runMLPipeline(filename, videoPath, resultPath);
+
+    return res.status(201).json({ message: 'Upload successful', filename });
   });
 });
 
-// List uploaded videos
+/**
+ * Spawn the Python ML pipeline for a video file.
+ * Updates the jobs Map with status and results.
+ */
+function runMLPipeline(filename, videoPath, resultPath) {
+  jobs.set(filename, { id: filename, status: 'processing', highlights: [] });
+
+  const args = [
+    ML_SCRIPT,
+    '--video', videoPath,
+    '--format', 'json',
+    '--output', resultPath,
+  ];
+
+  const child = spawn(PYTHON_BIN, args, { stdio: 'pipe' });
+
+  let stderr = '';
+  child.stderr.on('data', (data) => { stderr += data.toString(); });
+
+  child.on('close', (code) => {
+    if (code !== 0) {
+      jobs.set(filename, {
+        id: filename,
+        status: 'error',
+        error: stderr.trim() || `ML process exited with code ${code}`,
+        highlights: [],
+      });
+      return;
+    }
+
+    try {
+      const raw = fs.readFileSync(resultPath, 'utf-8');
+      const data = JSON.parse(raw);
+      jobs.set(filename, {
+        id: filename,
+        status: 'done',
+        highlights: data.highlights || [],
+      });
+    } catch (e) {
+      jobs.set(filename, {
+        id: filename,
+        status: 'error',
+        error: 'Failed to parse ML results',
+        highlights: [],
+      });
+    }
+  });
+
+  child.on('error', (err) => {
+    jobs.set(filename, {
+      id: filename,
+      status: 'error',
+      error: err.message,
+      highlights: [],
+    });
+  });
+}
+
+// Expose for testing
+app._jobs = jobs;
+app._runMLPipeline = runMLPipeline;
+
+// List uploaded videos with processing status
 app.get('/uploads', (req, res) => {
-  const files = fs.readdirSync(uploadDir).filter((f) => f !== '.gitkeep');
-  const uploads = files.map((filename) => ({
-    filename,
-    hasResults: results.has(filename),
-  }));
+  const files = fs.readdirSync(uploadDir).filter((f) => f !== '.gitkeep' && !f.endsWith('.json'));
+  const uploads = files.map((filename) => {
+    const job = jobs.get(filename);
+    return {
+      filename,
+      status: job ? job.status : 'unknown',
+    };
+  });
   res.json({ uploads });
 });
 
 // Get highlight results for a video
 app.get('/results/:id', (req, res) => {
-  const data = results.get(req.params.id);
-  if (!data) {
+  const job = jobs.get(req.params.id);
+  if (!job) {
     return res.status(404).json({ error: 'No results found for this id.' });
   }
-  return res.json(data);
+  return res.json(job);
 });
 
 // Health check
