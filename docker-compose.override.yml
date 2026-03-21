@@ -1,0 +1,11 @@
+# Local dev overrides — NOT committed to prod
+# ML performance tuning to prevent OOM on local Docker Desktop
+services:
+  app:
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    environment:
+      - ML_SKIP_FRAMES=3
+      - ML_MAX_WIDTH=480

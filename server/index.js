@@ -37,6 +37,10 @@ function restoreJobs() {
 const ML_SCRIPT = path.resolve(__dirname, '..', 'ml', 'highlight_detector.py');
 const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
 
+// ML performance tuning (set via env for local dev, 0 = full quality for prod)
+const ML_SKIP_FRAMES = process.env.ML_SKIP_FRAMES || '0';
+const ML_MAX_WIDTH = process.env.ML_MAX_WIDTH || '0';
+
 // Create uploads directory if it doesn't exist
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
@@ -120,6 +124,8 @@ function runMLPipeline(filename, videoPath, resultPath) {
     '--video', videoPath,
     '--format', 'json',
     '--output', resultPath,
+    '--skip-frames', ML_SKIP_FRAMES,
+    '--max-width', ML_MAX_WIDTH,
   ];
 
   const child = spawn(PYTHON_BIN, args, { stdio: 'pipe' });

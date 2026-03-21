@@ -18,6 +18,8 @@ def detect_highlights(
     threshold: float = 15.0,
     cooldown_sec: float = 2.0,
     max_highlights: int = 10,
+    skip_frames: int = 0,
+    max_width: int = 0,
 ) -> list[dict]:
     """Detect highlights in a video using frame-difference analysis.
 
@@ -29,6 +31,8 @@ def detect_highlights(
         threshold: Minimum mean pixel difference to consider a highlight.
         cooldown_sec: Minimum seconds between two highlights.
         max_highlights: Maximum number of highlights to return.
+        skip_frames: Analyze every Nth frame (0 = no skipping).
+        max_width: Downscale frames to this width in pixels (0 = no scaling).
 
     Returns:
         List of dicts with 'timestamp' (float, seconds) and 'score' (float).
@@ -49,14 +53,27 @@ def detect_highlights(
     candidates: list[dict] = []
     frame_idx = 0
 
+    step = max(1, skip_frames) if skip_frames > 0 else 1
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
+        frame_idx += 1
+
+        # Skip frames for performance (still count them for correct timestamps)
+        if step > 1 and frame_idx % step != 0:
+            continue
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        if prev_gray is not None:
+        # Downscale for performance
+        if max_width > 0 and gray.shape[1] > max_width:
+            scale = max_width / gray.shape[1]
+            gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+        if prev_gray is not None and gray.shape == prev_gray.shape:
             diff = cv2.absdiff(prev_gray, gray)
             score = float(np.mean(diff))
 
@@ -65,7 +82,6 @@ def detect_highlights(
                 candidates.append({"timestamp": timestamp, "score": round(score, 2)})
 
         prev_gray = gray
-        frame_idx += 1
 
     cap.release()
 
@@ -102,11 +118,16 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=15.0, help="Activity threshold (default: 15.0)")
     parser.add_argument("--cooldown", type=float, default=2.0, help="Cooldown between highlights in seconds")
     parser.add_argument("--max", type=int, default=10, help="Maximum number of highlights")
+    parser.add_argument("--skip-frames", type=int, default=0, help="Analyze every Nth frame (0 = all)")
+    parser.add_argument("--max-width", type=int, default=0, help="Downscale frames to this width (0 = original)")
     parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
     parser.add_argument("--output", type=str, default=None, help="Output file path (default: stdout)")
     args = parser.parse_args()
 
-    highlights = detect_highlights(args.video, args.threshold, args.cooldown, args.max)
+    highlights = detect_highlights(
+        args.video, args.threshold, args.cooldown, args.max,
+        skip_frames=args.skip_frames, max_width=args.max_width,
+    )
 
     if args.format == "json":
         result = json.dumps({"highlights": highlights}, indent=2)
