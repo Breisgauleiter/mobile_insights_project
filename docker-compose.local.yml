@@ -1,0 +1,11 @@
+# Local dev overrides — use with: docker compose -f docker-compose.yml -f docker-compose.local.yml up
+# ML performance tuning to prevent OOM on local Docker Desktop
+services:
+  app:
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    environment:
+      - ML_SKIP_FRAMES=3
+      - ML_MAX_WIDTH=480

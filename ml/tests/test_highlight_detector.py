@@ -79,6 +79,29 @@ class TestDetectHighlights:
             assert isinstance(h["timestamp"], float)
             assert isinstance(h["score"], float)
 
+    def test_skip_frames_reduces_candidates(self, activity_video):
+        full = highlight_detector.detect_highlights(activity_video, threshold=1.0)
+        skipped = highlight_detector.detect_highlights(
+            activity_video, threshold=1.0, skip_frames=5
+        )
+        # With skip_frames, we process fewer frames so may find fewer or equal candidates
+        assert isinstance(skipped, list)
+        assert len(skipped) <= len(full)
+
+    def test_max_width_still_detects_flash(self, activity_video):
+        results = highlight_detector.detect_highlights(
+            activity_video, threshold=10.0, max_width=40
+        )
+        assert len(results) >= 1
+        assert any(0.0 <= h["timestamp"] <= 1.0 for h in results)
+
+    def test_skip_frames_zero_is_noop(self, activity_video):
+        normal = highlight_detector.detect_highlights(activity_video, threshold=10.0)
+        explicit = highlight_detector.detect_highlights(
+            activity_video, threshold=10.0, skip_frames=0
+        )
+        assert len(normal) == len(explicit)
+
 
 class TestMergeCandidates:
     def test_empty_candidates(self):
