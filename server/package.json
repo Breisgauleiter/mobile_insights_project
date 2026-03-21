@@ -1,0 +1,20 @@
+{
+  "name": "mobile-insights-server",
+  "version": "1.0.0",
+  "description": "Simple Express server for mobile insights MVP",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "jest --verbose",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "multer": "^2.1.1"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "supertest": "^6.3.3"
+  }
+}

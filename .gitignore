@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Uploads & generated data
+server/uploads/
+uploads/
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+*.log
+
+# Mobile (React Native / Flutter)
+mobile_app/ios/Pods/
+mobile_app/android/.gradle/
+mobile_app/android/app/build/
+mobile_app/.dart_tool/
+mobile_app/build/
+*.apk
+*.ipa
+
+# ML artifacts
+ml/models/
+ml/*.onnx
+ml/*.pt
+ml/*.pth
