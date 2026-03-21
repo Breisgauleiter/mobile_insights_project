@@ -45,6 +45,9 @@ function parseNonNegativeIntEnv(value, fallback) {
 }
 const ML_SKIP_FRAMES = parseNonNegativeIntEnv(process.env.ML_SKIP_FRAMES, 0);
 const ML_MAX_WIDTH = parseNonNegativeIntEnv(process.env.ML_MAX_WIDTH, 0);
+const WHISPER_MODEL = process.env.WHISPER_MODEL || 'tiny';
+const ML_NO_AUDIO = process.env.ML_NO_AUDIO === '1';
+const ML_NO_COLOR = process.env.ML_NO_COLOR === '1';
 
 // Create uploads directory if it doesn't exist
 const uploadDir = path.join(__dirname, 'uploads');
@@ -131,7 +134,10 @@ function runMLPipeline(filename, videoPath, resultPath) {
     '--output', resultPath,
     '--skip-frames', ML_SKIP_FRAMES,
     '--max-width', ML_MAX_WIDTH,
+    '--whisper-model', WHISPER_MODEL,
   ];
+  if (ML_NO_AUDIO) args.push('--no-audio');
+  if (ML_NO_COLOR) args.push('--no-color');
 
   const child = spawn(PYTHON_BIN, args, { stdio: 'pipe' });
 
