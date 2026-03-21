@@ -47,6 +47,9 @@ const upload = multer({
 
 app.use(express.json());
 
+// Serve web UI
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Upload endpoint with multer error handling
 app.post('/upload', (req, res, next) => {
   upload.single('video')(req, res, (err) => {
@@ -165,8 +168,8 @@ app.get('/results/:id', (req, res) => {
 });
 
 // Health check
-app.get('/', (req, res) => {
-  res.json({ message: 'Mobile Insights Server ist online' });
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
 });
 
 // Error-handling middleware
