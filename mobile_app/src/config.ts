@@ -1,9 +1,14 @@
 /**
  * API configuration for the Mobile Insights app.
- * Set MOBILE_INSIGHTS_API_URL env var or edit the default below.
+ * Android emulator uses 10.0.2.2 to reach the host machine,
+ * iOS simulator can use localhost directly.
  */
+import {Platform} from 'react-native';
 
-// In development, use your local machine's IP (not localhost)
-// because the RN emulator runs in its own network namespace.
-export const API_BASE_URL =
-  process.env.MOBILE_INSIGHTS_API_URL ?? 'http://10.0.2.2:3000';
+const DEFAULT_URL = Platform.select({
+  android: 'http://10.0.2.2:3000',
+  ios: 'http://localhost:3000',
+  default: 'http://localhost:3000',
+});
+
+export const API_BASE_URL = DEFAULT_URL;

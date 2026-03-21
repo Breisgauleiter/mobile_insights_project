@@ -33,13 +33,15 @@ export default function UploadsScreen({navigation}: Props) {
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
+      setError(null);
       const data = await fetchUploads();
       setUploads(data.uploads);
-    } catch {
-      // silently fail — list stays empty
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load uploads');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -75,7 +77,11 @@ export default function UploadsScreen({navigation}: Props) {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
         ListEmptyComponent={
-          <Text style={styles.empty}>No uploads yet</Text>
+          error ? (
+            <Text style={styles.error}>{error}</Text>
+          ) : (
+            <Text style={styles.empty}>No uploads yet</Text>
+          )
         }
         renderItem={({item}) => (
           <TouchableOpacity
@@ -115,6 +121,12 @@ const styles = StyleSheet.create({
   },
   empty: {
     color: '#636e72',
+    textAlign: 'center',
+    marginTop: 40,
+    fontSize: 16,
+  },
+  error: {
+    color: '#d63031',
     textAlign: 'center',
     marginTop: 40,
     fontSize: 16,
