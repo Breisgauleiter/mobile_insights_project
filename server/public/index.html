@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mobile Insights</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f23;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1e1e3a;
+      padding: 20px 24px;
+      border-bottom: 2px solid #6c5ce7;
+    }
+
+    header h1 {
+      font-size: 22px;
+      color: #fff;
+      font-weight: 700;
+    }
+
+    header p {
+      font-size: 13px;
+      color: #a0a0c0;
+      margin-top: 4px;
+    }
+
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 24px 16px;
+    }
+
+    /* Upload area */
+    .upload-zone {
+      border: 2px dashed #6c5ce7;
+      border-radius: 12px;
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+      margin-bottom: 24px;
+    }
+
+    .upload-zone:hover, .upload-zone.dragover {
+      background: rgba(108, 92, 231, 0.1);
+      border-color: #a29bfe;
+    }
+
+    .upload-zone .icon { font-size: 48px; margin-bottom: 12px; }
+    .upload-zone .label { font-size: 16px; color: #a0a0c0; }
+    .upload-zone .hint { font-size: 12px; color: #636e72; margin-top: 8px; }
+
+    .upload-zone input[type="file"] { display: none; }
+
+    /* Progress bar */
+    .progress-wrap {
+      display: none;
+      margin-bottom: 24px;
+    }
+
+    .progress-wrap.active { display: block; }
+
+    .progress-bar {
+      height: 6px;
+      background: #1e1e3a;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-bar .fill {
+      height: 100%;
+      background: #6c5ce7;
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    .progress-text {
+      font-size: 12px;
+      color: #a0a0c0;
+      margin-top: 6px;
+    }
+
+    /* Section headings */
+    h2 {
+      font-size: 16px;
+      color: #fff;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #1e1e3a;
+    }
+
+    /* Upload list */
+    .uploads-list {
+      list-style: none;
+      margin-bottom: 24px;
+    }
+
+    .uploads-list li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: #1a1a2e;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .uploads-list li:hover { background: #252545; }
+
+    .uploads-list .name {
+      font-size: 13px;
+      color: #e0e0e0;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-right: 12px;
+    }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 6px;
+      text-transform: uppercase;
+    }
+
+    .badge.done { background: #00b894; color: #fff; }
+    .badge.processing { background: #fdcb6e; color: #1e1e3a; }
+    .badge.pending { background: #74b9ff; color: #1e1e3a; }
+    .badge.error { background: #d63031; color: #fff; }
+    .badge.unknown { background: #636e72; color: #fff; }
+
+    /* Results panel */
+    .results-panel {
+      display: none;
+      background: #1a1a2e;
+      border-radius: 12px;
+      padding: 20px;
+    }
+
+    .results-panel.active { display: block; }
+
+    .results-panel h3 {
+      font-size: 14px;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+
+    .results-panel .close-btn {
+      float: right;
+      background: none;
+      border: none;
+      color: #636e72;
+      font-size: 18px;
+      cursor: pointer;
+    }
+
+    .results-panel .close-btn:hover { color: #fff; }
+
+    .highlight-card {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 12px;
+      background: #0f0f23;
+      border-radius: 8px;
+      margin-bottom: 8px;
+    }
+
+    .highlight-card .time {
+      font-size: 20px;
+      font-weight: 700;
+      color: #6c5ce7;
+      min-width: 70px;
+    }
+
+    .highlight-card .score-bar {
+      flex: 1;
+      height: 8px;
+      background: #1e1e3a;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .highlight-card .score-bar .fill {
+      height: 100%;
+      background: linear-gradient(90deg, #6c5ce7, #a29bfe);
+      border-radius: 4px;
+    }
+
+    .highlight-card .score-val {
+      font-size: 13px;
+      color: #a0a0c0;
+      min-width: 32px;
+      text-align: right;
+    }
+
+    .no-highlights {
+      text-align: center;
+      color: #636e72;
+      padding: 24px;
+      font-size: 14px;
+    }
+
+    .status-msg {
+      text-align: center;
+      color: #a0a0c0;
+      padding: 16px;
+      font-size: 13px;
+    }
+
+    .empty-state {
+      text-align: center;
+      color: #636e72;
+      padding: 24px 0;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>&#127918; Mobile Insights</h1>
+    <p>Upload gameplay videos &mdash; get highlights automatically</p>
+  </header>
+
+  <main>
+    <!-- Upload -->
+    <div class="upload-zone" id="uploadZone">
+      <div class="icon">&#128249;</div>
+      <div class="label">Drop a video here or click to browse</div>
+      <div class="hint">MP4, MOV, AVI &bull; max 500 MB</div>
+      <input type="file" id="fileInput" accept="video/*">
+    </div>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+      <div class="progress-text" id="progressText">Uploading...</div>
+    </div>
+
+    <!-- Results panel -->
+    <div class="results-panel" id="resultsPanel">
+      <button class="close-btn" id="closeResults">&times;</button>
+      <h3 id="resultsTitle">Results</h3>
+      <div id="resultsContent"></div>
+    </div>
+
+    <!-- Uploads list -->
+    <h2>Uploads</h2>
+    <ul class="uploads-list" id="uploadsList">
+      <li class="empty-state">No uploads yet</li>
+    </ul>
+  </main>
+
+  <script>
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('fileInput');
+    const progressWrap = document.getElementById('progressWrap');
+    const progressFill = document.getElementById('progressFill');
+    const progressText = document.getElementById('progressText');
+    const uploadsList = document.getElementById('uploadsList');
+    const resultsPanel = document.getElementById('resultsPanel');
+    const resultsTitle = document.getElementById('resultsTitle');
+    const resultsContent = document.getElementById('resultsContent');
+    const closeResults = document.getElementById('closeResults');
+
+    let pollTimer = null;
+
+    // Drag & drop
+    uploadZone.addEventListener('click', () => fileInput.click());
+
+    uploadZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadZone.classList.add('dragover');
+    });
+
+    uploadZone.addEventListener('dragleave', () => {
+      uploadZone.classList.remove('dragover');
+    });
+
+    uploadZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadZone.classList.remove('dragover');
+      const file = e.dataTransfer.files[0];
+      if (file) uploadFile(file);
+    });
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files[0]) uploadFile(fileInput.files[0]);
+    });
+
+    // Upload
+    function uploadFile(file) {
+      if (!file.type.startsWith('video/')) {
+        alert('Please select a video file.');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('video', file);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/upload');
+
+      progressWrap.classList.add('active');
+      progressFill.style.width = '0%';
+      progressText.textContent = 'Uploading...';
+
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          progressFill.style.width = pct + '%';
+          progressText.textContent = `Uploading... ${pct}%`;
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status === 201) {
+          progressFill.style.width = '100%';
+          progressText.textContent = 'Upload complete — processing...';
+          setTimeout(() => {
+            progressWrap.classList.remove('active');
+          }, 2000);
+          loadUploads();
+          startPolling();
+        } else {
+          const data = JSON.parse(xhr.responseText);
+          progressText.textContent = 'Error: ' + (data.error || 'Upload failed');
+          progressFill.style.width = '0%';
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        progressText.textContent = 'Network error — is the server running?';
+      });
+
+      xhr.send(formData);
+      fileInput.value = '';
+    }
+
+    // Load uploads list
+    async function loadUploads() {
+      try {
+        const res = await fetch('/uploads');
+        const data = await res.json();
+        renderUploads(data.uploads);
+
+        const hasActive = data.uploads.some(
+          (u) => u.status === 'pending' || u.status === 'processing'
+        );
+        if (hasActive) {
+          startPolling();
+        } else {
+          stopPolling();
+        }
+      } catch {
+        uploadsList.innerHTML =
+          '<li class="empty-state">Could not load uploads</li>';
+      }
+    }
+
+    function renderUploads(uploads) {
+      if (!uploads.length) {
+        uploadsList.innerHTML =
+          '<li class="empty-state">No uploads yet</li>';
+        return;
+      }
+
+      uploadsList.innerHTML = uploads
+        .map(
+          (u) => `
+        <li data-id="${esc(u.filename)}" onclick="showResults('${esc(u.filename)}')">
+          <span class="name">${esc(u.filename)}</span>
+          <span class="badge ${esc(u.status)}">${esc(u.status)}</span>
+        </li>`
+        )
+        .join('');
+    }
+
+    // Polling for active jobs
+    function startPolling() {
+      if (pollTimer) return;
+      pollTimer = setInterval(loadUploads, 2000);
+    }
+
+    function stopPolling() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    // Show results
+    async function showResults(id) {
+      resultsPanel.classList.add('active');
+      resultsTitle.textContent = id;
+      resultsContent.innerHTML = '<div class="status-msg">Loading...</div>';
+
+      try {
+        const res = await fetch('/results/' + encodeURIComponent(id));
+        if (!res.ok) {
+          resultsContent.innerHTML =
+            '<div class="no-highlights">No results available yet</div>';
+          return;
+        }
+        const data = await res.json();
+
+        if (data.status === 'processing' || data.status === 'pending') {
+          resultsContent.innerHTML =
+            '<div class="status-msg">&#9203; Processing... check back in a moment</div>';
+          return;
+        }
+
+        if (data.status === 'error') {
+          resultsContent.innerHTML =
+            '<div class="no-highlights">&#9888; Error: ' +
+            esc(data.error || 'unknown error') +
+            '</div>';
+          return;
+        }
+
+        if (!data.highlights || !data.highlights.length) {
+          resultsContent.innerHTML =
+            '<div class="no-highlights">No highlights detected</div>';
+          return;
+        }
+
+        resultsContent.innerHTML = data.highlights
+          .map(
+            (h) => `
+          <div class="highlight-card">
+            <div class="time">${formatTime(h.timestamp)}</div>
+            <div class="score-bar"><div class="fill" style="width:${h.score}%"></div></div>
+            <div class="score-val">${h.score}</div>
+          </div>`
+          )
+          .join('');
+      } catch {
+        resultsContent.innerHTML =
+          '<div class="no-highlights">Failed to load results</div>';
+      }
+    }
+
+    closeResults.addEventListener('click', () => {
+      resultsPanel.classList.remove('active');
+    });
+
+    // Helpers
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return m + ':' + String(s).padStart(2, '0');
+    }
+
+    function esc(str) {
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    // Initial load
+    loadUploads();
+  </script>
+</body>
+</html>

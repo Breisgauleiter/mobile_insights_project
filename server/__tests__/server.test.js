@@ -14,11 +14,11 @@ function cleanUploads() {
 
 afterAll(cleanUploads);
 
-describe('GET /', () => {
-  it('should return health check message', async () => {
-    const res = await request(app).get('/');
+describe('GET /health', () => {
+  it('should return health check', async () => {
+    const res = await request(app).get('/health');
     expect(res.statusCode).toBe(200);
-    expect(res.body.message).toBe('Mobile Insights Server ist online');
+    expect(res.body.status).toBe('ok');
   });
 });
 
