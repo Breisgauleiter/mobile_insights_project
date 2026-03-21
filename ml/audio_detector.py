@@ -53,6 +53,7 @@ _EVENT_PATTERNS: list[tuple[str, str, float]] = [
 def detect_audio_events(
     video_path: str,
     whisper_model: str = "tiny",
+    ffmpeg_timeout: int = 300,
 ) -> list[dict]:
     """Detect MLBB announcer events from video audio using Whisper.
 
@@ -74,7 +75,7 @@ def detect_audio_events(
         return []
 
     # Extract audio to temporary WAV file
-    audio_path = _extract_audio(video_path)
+    audio_path = _extract_audio(video_path, timeout=ffmpeg_timeout)
     if audio_path is None:
         return []
 
@@ -103,8 +104,12 @@ def detect_audio_events(
             os.unlink(audio_path)
 
 
-def _extract_audio(video_path: str) -> str | None:
+def _extract_audio(video_path: str, timeout: int = 300) -> str | None:
     """Extract audio from video to a temporary WAV file using ffmpeg.
+
+    Args:
+        video_path: Path to the video file.
+        timeout: Maximum seconds to wait for ffmpeg (default: 300).
 
     Returns:
         Path to the temporary WAV file, or None if extraction fails.
@@ -121,7 +126,7 @@ def _extract_audio(video_path: str) -> str | None:
                 "-y", tmp.name,
             ],
             capture_output=True,
-            timeout=120,
+            timeout=timeout,
             check=True,
         )
         return tmp.name

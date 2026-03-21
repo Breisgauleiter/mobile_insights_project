@@ -9,6 +9,7 @@ to detect gameplay highlights with event-type classification.
 import argparse
 import json
 import os
+import sys
 
 import cv2
 import numpy as np
@@ -168,8 +169,8 @@ def detect_highlights(
             for e in audio_events:
                 e["sources"] = ["audio"]
             all_events.extend(audio_events)
-        except Exception:
-            pass  # Audio detection is optional
+        except (ImportError, FileNotFoundError, RuntimeError, OSError) as exc:
+            print(f"[warn] Audio detection skipped: {exc}", file=sys.stderr)
 
     # 3. Color-burst detector
     if enable_color:
@@ -184,8 +185,8 @@ def detect_highlights(
                 e["type"] = "effect"
                 e["sources"] = ["color"]
             all_events.extend(color_events)
-        except Exception:
-            pass  # Color detection is optional
+        except (FileNotFoundError, RuntimeError, OSError) as exc:
+            print(f"[warn] Color detection skipped: {exc}", file=sys.stderr)
 
     # Combine events that are close in time
     combined = _combine_events(all_events, cooldown_sec)
@@ -198,39 +199,52 @@ def detect_highlights(
 def _combine_events(events: list[dict], cooldown_sec: float) -> list[dict]:
     """Combine events from multiple detectors that overlap in time.
 
-    When events from different sources fall within the cooldown window,
-    they are merged: audio events take priority for type classification,
-    scores are boosted, and sources are combined.
+    Single-pass merge over time-sorted events. When events fall within
+    the cooldown window they are merged: audio events take priority for
+    type classification, scores are boosted once when multiple distinct
+    sources are present, and sources are combined.
     """
     if not events:
         return []
 
-    # Sort by timestamp
     events.sort(key=lambda e: e["timestamp"])
 
     combined: list[dict] = []
-    for event in events:
-        merged = False
-        for existing in combined:
-            if abs(event["timestamp"] - existing["timestamp"]) < cooldown_sec:
-                # Merge: boost score, combine sources, prefer audio type
-                existing["score"] = round(
-                    max(existing["score"], event["score"]) * 1.2, 2
-                )
-                existing["score"] = min(existing["score"], 100.0)
-                for src in event.get("sources", []):
-                    if src not in existing.get("sources", []):
-                        existing["sources"].append(src)
-                # Audio events provide the most reliable type
-                if "audio" in event.get("sources", []):
-                    existing["type"] = event["type"]
-                merged = True
-                break
+    current = dict(events[0])
 
-        if not merged:
-            combined.append(dict(event))
+    for event in events[1:]:
+        if event["timestamp"] - current["timestamp"] < cooldown_sec:
+            # Merge into current cluster
+            current["timestamp"] = event["timestamp"]
+            current["score"] = max(
+                current.get("score", 0.0), event.get("score", 0.0)
+            )
+            # Combine sources
+            cur_sources = current.get("sources") or []
+            for src in event.get("sources") or []:
+                if src not in cur_sources:
+                    cur_sources.append(src)
+            current["sources"] = cur_sources
+            # Audio events provide the most reliable type
+            if "audio" in (event.get("sources") or []):
+                current["type"] = event["type"]
+        else:
+            # Finalize current cluster: boost if multiple sources
+            _finalize_cluster(current)
+            combined.append(current)
+            current = dict(event)
 
+    _finalize_cluster(current)
+    combined.append(current)
     return combined
+
+
+def _finalize_cluster(cluster: dict) -> None:
+    """Apply score boost if the cluster has multiple distinct sources."""
+    sources = set(cluster.get("sources") or [])
+    if len(sources) > 1:
+        cluster["score"] = cluster.get("score", 0.0) * 1.2
+    cluster["score"] = min(round(cluster["score"], 2), 100.0)
 
 
 def main() -> None:

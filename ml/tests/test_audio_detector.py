@@ -90,11 +90,9 @@ class TestDetectAudioEvents:
         with pytest.raises(FileNotFoundError):
             audio_detector.detect_audio_events("/nonexistent/video.mp4")
 
-    def test_returns_empty_without_whisper(self, tmp_path):
+    def test_returns_empty_without_whisper(self, tmp_path, monkeypatch):
         """When Whisper is not available, should return empty list."""
-        if audio_detector.WHISPER_AVAILABLE:
-            pytest.skip("Whisper is installed — cannot test fallback")
-        # Create a dummy file so FileNotFoundError is not raised
+        monkeypatch.setattr(audio_detector, "WHISPER_AVAILABLE", False)
         dummy = tmp_path / "dummy.mp4"
         dummy.touch()
         result = audio_detector.detect_audio_events(str(dummy))

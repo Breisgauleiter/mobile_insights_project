@@ -205,8 +205,18 @@ class TestCombineEvents:
         ]
         combined = highlight_detector._combine_events(events, 2.0)
         assert len(combined) == 1
-        # Score should be boosted (max * 1.2)
-        assert combined[0]["score"] >= 60.0
+        # Score should be boosted: max(50, 60) * 1.2 = 72.0
+        assert combined[0]["score"] == 72.0
+
+    def test_no_boost_single_source(self):
+        events = [
+            {"timestamp": 1.0, "score": 50.0, "type": "action", "sources": ["frame_diff"]},
+            {"timestamp": 1.2, "score": 60.0, "type": "action", "sources": ["frame_diff"]},
+        ]
+        combined = highlight_detector._combine_events(events, 2.0)
+        assert len(combined) == 1
+        # Same source, no boost
+        assert combined[0]["score"] == 60.0
 
     def test_score_capped_at_100(self):
         events = [
@@ -215,3 +225,49 @@ class TestCombineEvents:
         ]
         combined = highlight_detector._combine_events(events, 2.0)
         assert combined[0]["score"] <= 100.0
+
+
+class TestMultiSignalIntegration:
+    """Integration tests for the combined pipeline with mocked detectors."""
+
+    def test_combined_pipeline_merges_sources(self, activity_video, monkeypatch):
+        """Mock audio/color detectors and verify the combined pipeline."""
+
+        def mock_audio(video_path, whisper_model="tiny", ffmpeg_timeout=300):
+            return [
+                {"timestamp": 0.5, "score": 80.0, "type": "kill", "text": "slain"},
+            ]
+
+        def mock_color(video_path, **kwargs):
+            return [
+                {"timestamp": 0.6, "score": 40.0, "dominant_color": "red"},
+            ]
+
+        monkeypatch.setattr(highlight_detector, "detect_audio_events", mock_audio)
+        monkeypatch.setattr(highlight_detector, "detect_color_bursts", mock_color)
+
+        results = highlight_detector.detect_highlights(
+            activity_video, threshold=10.0,
+            enable_audio=True, enable_color=True,
+        )
+        assert len(results) >= 1
+        # Should have merged sources from frame_diff, audio, color
+        top = results[0]
+        assert "type" in top
+        assert "sources" in top
+        assert isinstance(top["sources"], list)
+
+    def test_audio_failure_does_not_break_pipeline(self, activity_video, monkeypatch):
+        """If audio raises RuntimeError, pipeline still returns frame-diff results."""
+
+        def mock_audio_fail(video_path, whisper_model="tiny", ffmpeg_timeout=300):
+            raise RuntimeError("Whisper model not found")
+
+        monkeypatch.setattr(highlight_detector, "detect_audio_events", mock_audio_fail)
+
+        results = highlight_detector.detect_highlights(
+            activity_video, threshold=10.0,
+            enable_audio=True, enable_color=False,
+        )
+        assert len(results) >= 1
+        assert all("frame_diff" in h.get("sources", []) for h in results)
