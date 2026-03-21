@@ -21,10 +21,11 @@ function restoreJobs() {
     try {
       const raw = fs.readFileSync(path.join(uploadDir, jsonFile), 'utf-8');
       const data = JSON.parse(raw);
+      const highlights = Array.isArray(data.highlights) ? data.highlights : [];
       jobs.set(videoFile, {
         id: videoFile,
         status: 'done',
-        highlights: data.highlights || [],
+        highlights,
       });
     } catch {
       // skip corrupt files
@@ -168,6 +169,7 @@ function runMLPipeline(filename, videoPath, resultPath) {
 // Expose for testing
 app._jobs = jobs;
 app._runMLPipeline = runMLPipeline;
+app._restoreJobs = restoreJobs;
 
 // List uploaded videos with processing status
 app.get('/uploads', (req, res) => {
@@ -209,23 +211,45 @@ app.get('/video/:filename', (req, res) => {
   const fileSize = stat.size;
   const range = req.headers.range;
 
+  // Determine MIME type from file extension
+  const extMap = { '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.avi': 'video/x-msvideo', '.webm': 'video/webm', '.mkv': 'video/x-matroska' };
+  const contentType = extMap[path.extname(filename).toLowerCase()] || 'application/octet-stream';
+
   if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const rangeMatch = /^bytes=(\d*)-(\d*)$/.exec(range);
+
+    if (!rangeMatch || !rangeMatch[1]) {
+      return res.status(416).json({ message: 'Requested Range Not Satisfiable' });
+    }
+
+    const start = Number(rangeMatch[1]);
+    let end = rangeMatch[2] ? Number(rangeMatch[2]) : fileSize - 1;
+
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return res.status(416).json({ message: 'Requested Range Not Satisfiable' });
+    }
+
+    if (end > fileSize - 1) {
+      end = fileSize - 1;
+    }
+
+    if (start < 0 || start > end || start >= fileSize) {
+      return res.status(416).json({ message: 'Requested Range Not Satisfiable' });
+    }
+
     const chunkSize = end - start + 1;
 
     res.writeHead(206, {
       'Content-Range': `bytes ${start}-${end}/${fileSize}`,
       'Accept-Ranges': 'bytes',
       'Content-Length': chunkSize,
-      'Content-Type': 'video/mp4',
+      'Content-Type': contentType,
     });
     fs.createReadStream(filePath, { start, end }).pipe(res);
   } else {
     res.writeHead(200, {
       'Content-Length': fileSize,
-      'Content-Type': 'video/mp4',
+      'Content-Type': contentType,
     });
     fs.createReadStream(filePath).pipe(res);
   }

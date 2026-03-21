@@ -205,4 +205,100 @@ describe('GET /video/:filename', () => {
     expect(res.statusCode).toBe(404);
     fs.unlinkSync(path.join(uploadsDir, 'secret.json'));
   });
+
+  it('should return 416 for malformed Range header', async () => {
+    const res = await request(app)
+      .get(`/video/${testFile}`)
+      .set('Range', 'bytes=-500');
+    expect(res.statusCode).toBe(416);
+  });
+
+  it('should return 416 for out-of-bounds Range', async () => {
+    const res = await request(app)
+      .get(`/video/${testFile}`)
+      .set('Range', 'bytes=99999-100000');
+    expect(res.statusCode).toBe(416);
+  });
+});
+
+describe('restoreJobs()', () => {
+  afterEach(cleanUploads);
+
+  it('should restore done jobs from existing .json result files', () => {
+    const filename = 'restored-video.mp4';
+    fs.writeFileSync(path.join(uploadsDir, filename), 'fake video');
+    fs.writeFileSync(
+      path.join(uploadsDir, filename + '.json'),
+      JSON.stringify({ highlights: [{ timestamp: 2.0, score: 50 }] })
+    );
+
+    app._jobs.clear();
+    app._restoreJobs();
+
+    const job = app._jobs.get(filename);
+    expect(job).toBeDefined();
+    expect(job.status).toBe('done');
+    expect(job.highlights).toHaveLength(1);
+    expect(job.highlights[0].timestamp).toBe(2.0);
+  });
+
+  it('should skip .json files without matching video', () => {
+    fs.writeFileSync(
+      path.join(uploadsDir, 'orphan.mp4.json'),
+      JSON.stringify({ highlights: [] })
+    );
+
+    app._jobs.clear();
+    app._restoreJobs();
+
+    expect(app._jobs.has('orphan.mp4')).toBe(false);
+  });
+
+  it('should handle corrupt .json gracefully', () => {
+    const filename = 'corrupt-video.mp4';
+    fs.writeFileSync(path.join(uploadsDir, filename), 'fake video');
+    fs.writeFileSync(path.join(uploadsDir, filename + '.json'), 'NOT JSON');
+
+    app._jobs.clear();
+    app._restoreJobs();
+
+    expect(app._jobs.has(filename)).toBe(false);
+  });
+
+  it('should normalize non-array highlights to empty array', () => {
+    const filename = 'bad-highlights.mp4';
+    fs.writeFileSync(path.join(uploadsDir, filename), 'fake video');
+    fs.writeFileSync(
+      path.join(uploadsDir, filename + '.json'),
+      JSON.stringify({ highlights: 'not-an-array' })
+    );
+
+    app._jobs.clear();
+    app._restoreJobs();
+
+    const job = app._jobs.get(filename);
+    expect(job).toBeDefined();
+    expect(job.highlights).toEqual([]);
+  });
+
+  it('should be reflected in GET /uploads after restore', async () => {
+    const filename = 'api-restore-test.mp4';
+    fs.writeFileSync(path.join(uploadsDir, filename), 'fake video');
+    fs.writeFileSync(
+      path.join(uploadsDir, filename + '.json'),
+      JSON.stringify({ highlights: [{ timestamp: 5, score: 80 }] })
+    );
+
+    app._jobs.clear();
+    app._restoreJobs();
+
+    const uploadsRes = await request(app).get('/uploads');
+    const entry = uploadsRes.body.uploads.find((u) => u.filename === filename);
+    expect(entry).toBeDefined();
+    expect(entry.status).toBe('done');
+
+    const resultsRes = await request(app).get(`/results/${filename}`);
+    expect(resultsRes.statusCode).toBe(200);
+    expect(resultsRes.body.highlights).toHaveLength(1);
+  });
 });
