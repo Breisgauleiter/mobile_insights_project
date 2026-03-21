@@ -58,3 +58,32 @@ mobile_insights_project/
 
 ## Hinweis
 Die mobile App ist in diesem Repository noch nicht implementiert, da sie native Bibliotheken und ein mobiles Build‑System voraussetzt. Sie soll später als separater Ordner im Unterverzeichnis `mobile_app` entstehen.
+
+## Docker
+
+The entire stack (server + ML pipeline) can be started with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+This builds a single image containing both the Node.js server and Python ML dependencies.
+The server is available at `http://localhost:3000`.
+
+To stop:
+```bash
+docker compose down
+```
+
+### Individual Dockerfiles
+
+Standalone images for each component are also available:
+
+```bash
+# Server only
+docker build -t insights-server -f server/Dockerfile server/
+
+# ML pipeline only
+docker build -t insights-ml -f ml/Dockerfile ml/
+docker run --rm -v $(pwd)/uploads:/data insights-ml --video /data/video.mp4 --format json --output /data/results.json
+```

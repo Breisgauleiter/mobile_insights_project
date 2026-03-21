@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+.git
+.github
+.venv
+__pycache__
+*.pyc
+mobile_app
+server/uploads
+server/__tests__
+ml/tests
+ml/.pytest_cache
+README.md
