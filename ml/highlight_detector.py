@@ -1,42 +1,124 @@
 #!/usr/bin/env python3
 """
-Dummy Highlight Detector for Mobile Insights MVP.
+Highlight Detector for Mobile Insights MVP.
 
-This script reads a video file and returns a list of "highlight" timestamps.  
-In a real implementation, replace the random selection with computer-vision models.
+Analyzes video files using frame-difference analysis to detect
+scenes with high visual activity as potential highlights.
 """
 import argparse
-import random
+import json
 import os
 
 import cv2
+import numpy as np
 
 
-def detect_highlights(video_path, num_highlights=5):
+def detect_highlights(
+    video_path: str,
+    threshold: float = 15.0,
+    cooldown_sec: float = 2.0,
+    max_highlights: int = 10,
+) -> list[dict]:
+    """Detect highlights in a video using frame-difference analysis.
+
+    Compares consecutive grayscale frames to find moments of high
+    visual activity (e.g., fast movement, scene changes).
+
+    Args:
+        video_path: Path to the video file.
+        threshold: Minimum mean pixel difference to consider a highlight.
+        cooldown_sec: Minimum seconds between two highlights.
+        max_highlights: Maximum number of highlights to return.
+
+    Returns:
+        List of dicts with 'timestamp' (float, seconds) and 'score' (float).
+    """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        raise RuntimeError("Could not open video")
+        raise RuntimeError(f"Could not open video: {video_path}")
+
     fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration_sec = frame_count / fps if fps > 0 else 0
-    
-    # Generate random highlight timestamps for demonstration
-    highlights = sorted([round(random.uniform(0, max(0, duration_sec - 1)), 2) for _ in range(num_highlights)])
+    if fps <= 0:
+        cap.release()
+        raise RuntimeError("Video has invalid FPS")
+
+    prev_gray = None
+    candidates: list[dict] = []
+    frame_idx = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        if prev_gray is not None:
+            diff = cv2.absdiff(prev_gray, gray)
+            score = float(np.mean(diff))
+
+            if score >= threshold:
+                timestamp = round(frame_idx / fps, 2)
+                candidates.append({"timestamp": timestamp, "score": round(score, 2)})
+
+        prev_gray = gray
+        frame_idx += 1
+
     cap.release()
-    return highlights
+
+    # Merge nearby candidates using cooldown period
+    highlights = _merge_candidates(candidates, cooldown_sec)
+
+    # Sort by score descending and limit
+    highlights.sort(key=lambda h: h["score"], reverse=True)
+    return highlights[:max_highlights]
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Dummy Highlight Detector")
+def _merge_candidates(
+    candidates: list[dict], cooldown_sec: float
+) -> list[dict]:
+    """Merge candidates that are within the cooldown period, keeping the highest score."""
+    if not candidates:
+        return []
+
+    merged: list[dict] = [candidates[0]]
+    for c in candidates[1:]:
+        if c["timestamp"] - merged[-1]["timestamp"] < cooldown_sec:
+            # Keep the one with the higher score
+            if c["score"] > merged[-1]["score"]:
+                merged[-1] = c
+        else:
+            merged.append(c)
+
+    return merged
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Frame-Difference Highlight Detector")
     parser.add_argument("--video", required=True, help="Path to video file")
-    parser.add_argument("--n", type=int, default=5, help="Number of highlight timestamps to return")
+    parser.add_argument("--threshold", type=float, default=15.0, help="Activity threshold (default: 15.0)")
+    parser.add_argument("--cooldown", type=float, default=2.0, help="Cooldown between highlights in seconds")
+    parser.add_argument("--max", type=int, default=10, help="Maximum number of highlights")
+    parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
+    parser.add_argument("--output", type=str, default=None, help="Output file path (default: stdout)")
     args = parser.parse_args()
-    
-    highlights = detect_highlights(args.video, args.n)
-    for t in highlights:
-        print(f"Highlight at {t} seconds")
+
+    highlights = detect_highlights(args.video, args.threshold, args.cooldown, args.max)
+
+    if args.format == "json":
+        result = json.dumps({"highlights": highlights}, indent=2)
+    else:
+        lines = [f"Highlight at {h['timestamp']}s (score: {h['score']})" for h in highlights]
+        result = "\n".join(lines) if lines else "No highlights detected."
+
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(result + "\n")
+    else:
+        print(result)
 
 
 if __name__ == "__main__":
