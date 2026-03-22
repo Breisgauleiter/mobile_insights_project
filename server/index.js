@@ -3,6 +3,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const archiver = require('archiver');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -53,6 +55,12 @@ const ML_NO_COLOR = process.env.ML_NO_COLOR === '1';
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
+}
+
+// Create clips cache directory
+const clipsDir = path.join(uploadDir, '.clips');
+if (!fs.existsSync(clipsDir)) {
+  fs.mkdirSync(clipsDir);
 }
 
 restoreJobs();
@@ -216,6 +224,8 @@ function runMLPipeline(filename, videoPath, resultPath) {
 app._jobs = jobs;
 app._runMLPipeline = runMLPipeline;
 app._restoreJobs = restoreJobs;
+app._clipsDir = clipsDir;
+app._deleteClipsForVideo = deleteClipsForVideo;
 
 // List uploaded videos with processing status
 app.get('/uploads', (req, res) => {
@@ -332,6 +342,7 @@ app.delete('/uploads/:filename', (req, res) => {
     fs.unlinkSync(resultPath);
   }
 
+  deleteClipsForVideo(filename);
   jobs.delete(filename);
 
   return res.status(200).json({ message: 'Deleted' });
@@ -358,6 +369,174 @@ app.post('/reprocess/:filename', (req, res) => {
   runMLPipeline(filename, videoPath, resultPath);
 
   return res.status(202).json({ message: 'Reprocessing started' });
+});
+
+/**
+ * Parse and clamp clip window parameters from query string.
+ * Returns { beforeSec, afterSec } clamped to [0, 30].
+ */
+function parseClipParams(query) {
+  const clamp = (val, min, max) => Math.min(max, Math.max(min, val));
+  const before = clamp(parseFloat(query.before ?? '5'), 0, 30);
+  const after = clamp(parseFloat(query.after ?? '5'), 0, 30);
+  return {
+    beforeSec: Number.isFinite(before) ? before : 5,
+    afterSec: Number.isFinite(after) ? after : 5,
+  };
+}
+
+// Rate limiter for clip extraction endpoints (ffmpeg is CPU-intensive)
+const clipRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many clip requests, please try again later.' },
+});
+
+/**
+ * Delete all cached clips for a given video filename.
+ */
+function deleteClipsForVideo(filename) {
+  if (!fs.existsSync(clipsDir)) return;
+  const prefix = filename + '_t';
+  const entries = fs.readdirSync(clipsDir);
+  for (const entry of entries) {
+    if (entry.startsWith(prefix)) {
+      try {
+        fs.unlinkSync(path.join(clipsDir, entry));
+      } catch {
+        // ignore errors during cleanup
+      }
+    }
+  }
+}
+
+/**
+ * Extract a clip from a video using ffmpeg.
+ * Returns a promise that resolves with the output clip path, or rejects on error.
+ */
+function extractClip(videoPath, outputPath, start, duration) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-y',
+      '-ss', String(start),
+      '-i', videoPath,
+      '-t', String(duration),
+      '-c:v', 'libx264',
+      '-c:a', 'aac',
+      '-movflags', '+faststart',
+      outputPath,
+    ];
+
+    const ffmpeg = spawn('ffmpeg', args, { stdio: 'pipe' });
+    let stderrBuf = '';
+    ffmpeg.stderr.on('data', (d) => { stderrBuf += d.toString(); });
+
+    ffmpeg.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`ffmpeg exited with code ${code}: ${stderrBuf.trim()}`));
+      } else {
+        resolve(outputPath);
+      }
+    });
+
+    ffmpeg.on('error', (err) => {
+      reject(new Error(`ffmpeg spawn error: ${err.message}`));
+    });
+  });
+}
+
+// Extract and serve a highlight clip
+app.get('/clip/:filename', clipRateLimit, async (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const videoPath = path.join(uploadDir, filename);
+
+  if (!fs.existsSync(videoPath) || filename.endsWith('.json')) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+
+  const tRaw = parseFloat(req.query.t);
+  if (!Number.isFinite(tRaw) || tRaw < 0) {
+    return res.status(400).json({ error: 'Query param "t" must be a non-negative number (timestamp in seconds).' });
+  }
+
+  const { beforeSec, afterSec } = parseClipParams(req.query);
+
+  const start = Math.max(0, tRaw - beforeSec);
+  const duration = beforeSec + afterSec;
+
+  const cacheKey = `${filename}_t${tRaw}_b${beforeSec}_a${afterSec}.mp4`;
+  const cachePath = path.join(clipsDir, cacheKey);
+
+  if (fs.existsSync(cachePath)) {
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Disposition', `attachment; filename="${cacheKey}"`);
+    return fs.createReadStream(cachePath).pipe(res);
+  }
+
+  try {
+    await extractClip(videoPath, cachePath, start, duration);
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Disposition', `attachment; filename="${cacheKey}"`);
+    return fs.createReadStream(cachePath).pipe(res);
+  } catch (err) {
+    // Remove partial output if any
+    if (fs.existsSync(cachePath)) {
+      try { fs.unlinkSync(cachePath); } catch { /* ignore */ }
+    }
+    return res.status(500).json({ error: 'Failed to extract clip: ' + err.message });
+  }
+});
+
+// Export all highlight clips for a video as a zip archive
+app.get('/clips/zip/:filename', clipRateLimit, async (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const videoPath = path.join(uploadDir, filename);
+
+  if (!fs.existsSync(videoPath) || filename.endsWith('.json')) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+
+  const job = jobs.get(filename);
+  if (!job || !Array.isArray(job.highlights) || job.highlights.length === 0) {
+    return res.status(404).json({ error: 'No highlights found for this video.' });
+  }
+
+  const { beforeSec, afterSec } = parseClipParams(req.query);
+
+  const zipName = filename.replace(/\.[^.]+$/, '') + '_highlights.zip';
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+
+  const archive = archiver('zip', { zlib: { level: 0 } });
+  archive.on('error', (err) => {
+    // Headers may already be sent; just destroy the response
+    res.destroy(err);
+  });
+  archive.pipe(res);
+
+  const highlights = job.highlights;
+  for (const h of highlights) {
+    const ts = Number.isFinite(Number(h.timestamp)) ? Number(h.timestamp) : 0;
+    const start = Math.max(0, ts - beforeSec);
+    const duration = beforeSec + afterSec;
+    const cacheKey = `${filename}_t${ts}_b${beforeSec}_a${afterSec}.mp4`;
+    const cachePath = path.join(clipsDir, cacheKey);
+
+    if (!fs.existsSync(cachePath)) {
+      try {
+        await extractClip(videoPath, cachePath, start, duration);
+      } catch (err) {
+        console.error(`Failed to extract clip for ${filename} at t=${ts}: ${err.message}`);
+        // Skip clips that fail to extract
+        continue;
+      }
+    }
+    archive.file(cachePath, { name: cacheKey });
+  }
+
+  await archive.finalize();
 });
 
 // Error-handling middleware
