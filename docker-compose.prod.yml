@@ -1,0 +1,45 @@
+# Production compose — deployed behind Traefik on syntopia server
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mobile-insights-app
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - PYTHON_BIN=python3
+      - ML_SKIP_FRAMES=${ML_SKIP_FRAMES:-2}
+      - ML_MAX_WIDTH=${ML_MAX_WIDTH:-640}
+      - WHISPER_MODEL=${WHISPER_MODEL:-small}
+      - ML_NO_AUDIO=${ML_NO_AUDIO:-0}
+      - ML_NO_COLOR=${ML_NO_COLOR:-0}
+    volumes:
+      - uploads:/app/server/uploads
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.mobile-insights.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.mobile-insights.entrypoints=websecure
+      - traefik.http.routers.mobile-insights.tls.certresolver=main-resolver
+      - traefik.http.routers.mobile-insights-http.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.mobile-insights-http.entrypoints=web
+      - traefik.http.services.mobile-insights.loadbalancer.server.port=3000
+    networks:
+      - traefik-public
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  uploads:
+
+networks:
+  traefik-public:
+    external: true
