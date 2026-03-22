@@ -304,6 +304,62 @@ app.get('/video/:filename', (req, res) => {
   }
 });
 
+/**
+ * Returns true if the named job is currently processing.
+ */
+function isProcessing(filename) {
+  const job = jobs.get(filename);
+  return job ? job.status === 'processing' : false;
+}
+
+// Delete an uploaded video and its results
+app.delete('/uploads/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const videoPath = path.join(uploadDir, filename);
+  const resultPath = path.join(uploadDir, filename + '.json');
+
+  if (isProcessing(filename)) {
+    return res.status(409).json({ error: 'Job is currently processing' });
+  }
+
+  if (!fs.existsSync(videoPath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  fs.unlinkSync(videoPath);
+
+  if (fs.existsSync(resultPath)) {
+    fs.unlinkSync(resultPath);
+  }
+
+  jobs.delete(filename);
+
+  return res.status(200).json({ message: 'Deleted' });
+});
+
+// Reprocess an uploaded video through the ML pipeline
+app.post('/reprocess/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const videoPath = path.join(uploadDir, filename);
+  const resultPath = path.join(uploadDir, filename + '.json');
+
+  if (isProcessing(filename)) {
+    return res.status(409).json({ error: 'Job is currently processing' });
+  }
+
+  if (!fs.existsSync(videoPath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  if (fs.existsSync(resultPath)) {
+    fs.unlinkSync(resultPath);
+  }
+
+  runMLPipeline(filename, videoPath, resultPath);
+
+  return res.status(202).json({ message: 'Reprocessing started' });
+});
+
 // Error-handling middleware
 app.use((err, _req, res, _next) => {
   console.error(err);
