@@ -234,7 +234,7 @@ class TestMultiSignalIntegration:
     def test_combined_pipeline_merges_sources(self, activity_video, monkeypatch):
         """Mock audio/color detectors and verify the combined pipeline."""
 
-        def mock_audio(video_path, whisper_model="tiny", ffmpeg_timeout=300):
+        def mock_audio(video_path, whisper_model="tiny", ffmpeg_timeout=300, debug=False):
             return [
                 {"timestamp": 0.5, "score": 80.0, "type": "kill", "text": "slain"},
             ]
@@ -261,7 +261,7 @@ class TestMultiSignalIntegration:
     def test_audio_failure_does_not_break_pipeline(self, activity_video, monkeypatch):
         """If audio raises RuntimeError, pipeline still returns frame-diff results."""
 
-        def mock_audio_fail(video_path, whisper_model="tiny", ffmpeg_timeout=300):
+        def mock_audio_fail(video_path, whisper_model="tiny", ffmpeg_timeout=300, debug=False):
             raise RuntimeError("Whisper model not found")
 
         monkeypatch.setattr(highlight_detector, "detect_audio_events", mock_audio_fail)

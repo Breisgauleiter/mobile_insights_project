@@ -14,7 +14,7 @@ import sys
 import cv2
 import numpy as np
 
-from audio_detector import detect_audio_events
+from audio_detector import detect_audio_events, detect_volume_events
 from color_detector import detect_color_bursts
 
 
@@ -147,11 +147,13 @@ def detect_highlights(
     whisper_model: str = "tiny",
     enable_audio: bool = True,
     enable_color: bool = True,
+    enable_volume: bool = True,
+    debug: bool = False,
 ) -> list[dict]:
     """Run the multi-signal highlight detection pipeline.
 
-    Combines frame-difference, color-burst, and audio event detectors
-    into a single ranked list of highlights with event types.
+    Combines frame-difference, color-burst, audio event, and volume-based
+    detectors into a single ranked list of highlights with event types.
 
     Args:
         video_path: Path to the video file.
@@ -163,6 +165,8 @@ def detect_highlights(
         whisper_model: Whisper model size for audio detection.
         enable_audio: Whether to run audio detection.
         enable_color: Whether to run color-burst detection.
+        enable_volume: Whether to run volume-based fallback detection.
+        debug: When True, print Whisper transcription segments to stderr.
 
     Returns:
         List of dicts with 'timestamp', 'score', 'type', and 'sources'.
@@ -184,7 +188,7 @@ def detect_highlights(
     if enable_audio:
         _report_progress(20, "audio")
         try:
-            audio_events = detect_audio_events(video_path, whisper_model)
+            audio_events = detect_audio_events(video_path, whisper_model, debug=debug)
             for e in audio_events:
                 e["sources"] = ["audio"]
             all_events.extend(audio_events)
@@ -192,9 +196,23 @@ def detect_highlights(
             print(f"[warn] Audio detection skipped: {exc}", file=sys.stderr)
     _report_progress(80, "audio")
 
-    # 3. Color-burst detector
+    # 3. Volume-based fallback detector (RMS energy)
+    if enable_volume:
+        _report_progress(80, "volume")
+        try:
+            volume_events = detect_volume_events(
+                video_path,
+                cooldown_sec=cooldown_sec,
+            )
+            for e in volume_events:
+                e["sources"] = ["volume"]
+            all_events.extend(volume_events)
+        except (FileNotFoundError, RuntimeError, OSError) as exc:
+            print(f"[warn] Volume detection skipped: {exc}", file=sys.stderr)
+
+    # 4. Color-burst detector
     if enable_color:
-        _report_progress(80, "color")
+        _report_progress(85, "color")
         try:
             color_events = detect_color_bursts(
                 video_path,
@@ -280,6 +298,8 @@ def main() -> None:
     parser.add_argument("--whisper-model", type=str, default="tiny", help="Whisper model size (default: tiny)")
     parser.add_argument("--no-audio", action="store_true", help="Disable audio detection")
     parser.add_argument("--no-color", action="store_true", help="Disable color-burst detection")
+    parser.add_argument("--no-volume", action="store_true", help="Disable volume-based fallback detection")
+    parser.add_argument("--debug", action="store_true", help="Print Whisper transcription segments to stderr")
     parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
     parser.add_argument("--output", type=str, default=None, help="Output file path (default: stdout)")
     args = parser.parse_args()
@@ -290,6 +310,8 @@ def main() -> None:
         whisper_model=args.whisper_model,
         enable_audio=not args.no_audio,
         enable_color=not args.no_color,
+        enable_volume=not args.no_volume,
+        debug=args.debug,
     )
 
     if args.format == "json":
