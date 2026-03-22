@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -384,6 +385,15 @@ function parseClipParams(query) {
   };
 }
 
+// Rate limiter for clip extraction endpoints (ffmpeg is CPU-intensive)
+const clipRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many clip requests, please try again later.' },
+});
+
 /**
  * Delete all cached clips for a given video filename.
  */
@@ -438,7 +448,7 @@ function extractClip(videoPath, outputPath, start, duration) {
 }
 
 // Extract and serve a highlight clip
-app.get('/clip/:filename', async (req, res) => {
+app.get('/clip/:filename', clipRateLimit, async (req, res) => {
   const filename = path.basename(req.params.filename);
   const videoPath = path.join(uploadDir, filename);
 
@@ -480,7 +490,7 @@ app.get('/clip/:filename', async (req, res) => {
 });
 
 // Export all highlight clips for a video as a zip archive
-app.get('/clips/zip/:filename', async (req, res) => {
+app.get('/clips/zip/:filename', clipRateLimit, async (req, res) => {
   const filename = path.basename(req.params.filename);
   const videoPath = path.join(uploadDir, filename);
 
