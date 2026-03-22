@@ -23,7 +23,7 @@ _COLOR_RANGES = {
 
 def detect_color_bursts(
     video_path: str,
-    burst_threshold: float = 2.0,
+    burst_threshold: float = 4.0,
     cooldown_sec: float = 2.0,
     max_events: int = 20,
     skip_frames: int = 0,
@@ -108,7 +108,7 @@ def detect_color_bursts(
                 timestamp = round(frame_idx / fps, 2)
                 # Normalize the color name (merge red + red2)
                 color_name = "red" if best_color == "red2" else best_color
-                score = round(min(best_ratio * 10, 100.0), 2)
+                score = round(best_ratio * 10, 2)
                 candidates.append({
                     "timestamp": timestamp,
                     "score": score,

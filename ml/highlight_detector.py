@@ -18,6 +18,11 @@ from audio_detector import detect_audio_events
 from color_detector import detect_color_bursts
 
 
+def _report_progress(percent: int, stage: str) -> None:
+    """Write a progress update to stderr as JSON for the server to parse."""
+    print(json.dumps({"progress": percent, "stage": stage}), file=sys.stderr, flush=True)
+
+
 def detect_frame_diff(
     video_path: str,
     threshold: float = 15.0,
@@ -25,6 +30,7 @@ def detect_frame_diff(
     max_highlights: int = 10,
     skip_frames: int = 0,
     max_width: int = 0,
+    progress_callback=None,
 ) -> list[dict]:
     """Detect highlights in a video using frame-difference analysis.
 
@@ -54,16 +60,25 @@ def detect_frame_diff(
         cap.release()
         raise RuntimeError("Video has invalid FPS")
 
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     prev_gray = None
     candidates: list[dict] = []
     frame_idx = 0
 
     step = max(1, skip_frames) if skip_frames > 0 else 1
 
+    last_reported_pct = -1
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+
+        # Report progress within frame-diff stage
+        if progress_callback and total_frames > 0 and frame_idx % 100 == 0:
+            pct = int(frame_idx / total_frames * 100)
+            if pct != last_reported_pct:
+                progress_callback(pct)
+                last_reported_pct = pct
 
         # Skip frames for performance (still count them for correct timestamps)
         if step > 1 and frame_idx % step != 0:
@@ -155,15 +170,19 @@ def detect_highlights(
     all_events: list[dict] = []
 
     # 1. Frame-difference detector
+    _report_progress(0, "frame_diff")
     frame_events = detect_frame_diff(
         video_path, threshold, cooldown_sec,
         max_highlights=max_highlights * 2,
         skip_frames=skip_frames, max_width=max_width,
+        progress_callback=lambda pct: _report_progress(int(pct * 0.2), "frame_diff"),
     )
     all_events.extend(frame_events)
+    _report_progress(20, "frame_diff")
 
     # 2. Audio event detector (Whisper)
     if enable_audio:
+        _report_progress(20, "audio")
         try:
             audio_events = detect_audio_events(video_path, whisper_model)
             for e in audio_events:
@@ -171,9 +190,11 @@ def detect_highlights(
             all_events.extend(audio_events)
         except (ImportError, FileNotFoundError, RuntimeError, OSError) as exc:
             print(f"[warn] Audio detection skipped: {exc}", file=sys.stderr)
+    _report_progress(80, "audio")
 
     # 3. Color-burst detector
     if enable_color:
+        _report_progress(80, "color")
         try:
             color_events = detect_color_bursts(
                 video_path,
@@ -187,6 +208,7 @@ def detect_highlights(
             all_events.extend(color_events)
         except (FileNotFoundError, RuntimeError, OSError) as exc:
             print(f"[warn] Color detection skipped: {exc}", file=sys.stderr)
+    _report_progress(100, "done")
 
     # Combine events that are close in time
     combined = _combine_events(all_events, cooldown_sec)
@@ -244,7 +266,7 @@ def _finalize_cluster(cluster: dict) -> None:
     sources = set(cluster.get("sources") or [])
     if len(sources) > 1:
         cluster["score"] = cluster.get("score", 0.0) * 1.2
-    cluster["score"] = min(round(cluster["score"], 2), 100.0)
+    cluster["score"] = round(cluster["score"], 2)
 
 
 def main() -> None:
@@ -252,7 +274,7 @@ def main() -> None:
     parser.add_argument("--video", required=True, help="Path to video file")
     parser.add_argument("--threshold", type=float, default=15.0, help="Activity threshold (default: 15.0)")
     parser.add_argument("--cooldown", type=float, default=2.0, help="Cooldown between highlights in seconds")
-    parser.add_argument("--max", type=int, default=10, help="Maximum number of highlights")
+    parser.add_argument("--max", type=int, default=30, help="Maximum number of highlights")
     parser.add_argument("--skip-frames", type=int, default=0, help="Analyze every Nth frame (0 = all)")
     parser.add_argument("--max-width", type=int, default=0, help="Downscale frames to this width (0 = original)")
     parser.add_argument("--whisper-model", type=str, default="tiny", help="Whisper model size (default: tiny)")

@@ -218,13 +218,14 @@ class TestCombineEvents:
         # Same source, no boost
         assert combined[0]["score"] == 60.0
 
-    def test_score_capped_at_100(self):
+    def test_score_boosted_multi_source(self):
         events = [
             {"timestamp": 1.0, "score": 90.0, "type": "action", "sources": ["frame_diff"]},
             {"timestamp": 1.1, "score": 95.0, "type": "kill", "sources": ["audio"]},
         ]
         combined = highlight_detector._combine_events(events, 2.0)
-        assert combined[0]["score"] <= 100.0
+        # Multi-source gets 1.2x boost on max score (95 * 1.2 = 114)
+        assert combined[0]["score"] == 114.0
 
 
 class TestMultiSignalIntegration:
