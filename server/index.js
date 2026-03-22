@@ -125,7 +125,7 @@ app.post('/upload', (req, res, next) => {
  * Updates the jobs Map with status and results.
  */
 function runMLPipeline(filename, videoPath, resultPath) {
-  jobs.set(filename, { id: filename, status: 'processing', highlights: [] });
+  jobs.set(filename, { id: filename, status: 'processing', highlights: [], progress: 0, stage: 'starting', startedAt: Date.now() });
 
   const args = [
     ML_SCRIPT,
@@ -141,15 +141,44 @@ function runMLPipeline(filename, videoPath, resultPath) {
 
   const child = spawn(PYTHON_BIN, args, { stdio: 'pipe' });
 
-  let stderr = '';
-  child.stderr.on('data', (data) => { stderr += data.toString(); });
+  let stderrBuf = '';
+  child.stderr.on('data', (data) => {
+    stderrBuf += data.toString();
+    // Parse progress JSON lines from stderr
+    const lines = stderrBuf.split('\n');
+    stderrBuf = lines.pop(); // keep incomplete last line in buffer
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('{')) {
+        try {
+          const msg = JSON.parse(trimmed);
+          if (typeof msg.progress === 'number') {
+            const job = jobs.get(filename);
+            if (job && job.status === 'processing') {
+              job.progress = msg.progress;
+              job.stage = msg.stage || '';
+              // Calculate estimated remaining time
+              if (msg.progress > 0 && job.startedAt) {
+                const elapsed = (Date.now() - job.startedAt) / 1000;
+                job.eta_seconds = Math.round(elapsed / msg.progress * (100 - msg.progress));
+              } else {
+                job.eta_seconds = null;
+              }
+            }
+          }
+        } catch {
+          // not a progress line, ignore
+        }
+      }
+    }
+  });
 
   child.on('close', (code) => {
     if (code !== 0) {
       jobs.set(filename, {
         id: filename,
         status: 'error',
-        error: stderr.trim() || `ML process exited with code ${code}`,
+        error: stderrBuf.trim() || `ML process exited with code ${code}`,
         highlights: [],
       });
       return;
@@ -196,6 +225,9 @@ app.get('/uploads', (req, res) => {
     return {
       filename,
       status: job ? job.status : 'unknown',
+      progress: job ? job.progress : undefined,
+      stage: job ? job.stage : undefined,
+      eta_seconds: job ? job.eta_seconds : undefined,
     };
   });
   res.json({ uploads });
@@ -279,9 +311,13 @@ app.use((err, _req, res, _next) => {
 });
 
 if (require.main === module) {
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`Server läuft auf http://localhost:${port}`);
   });
+  // Increase timeouts for large video uploads (10 min)
+  server.requestTimeout = 600000;
+  server.headersTimeout = 120000;
+  server.timeout = 600000;
 }
 
 module.exports = app;
