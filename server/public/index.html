@@ -323,6 +323,29 @@
     .highlight-card:hover {
       background: #1a1a2e;
     }
+
+    /* Upload action buttons */
+    .upload-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+      margin-left: 8px;
+    }
+
+    .action-btn {
+      background: none;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      color: #a0a0c0;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 4px 8px;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .action-btn:hover { background: #252545; color: #fff; }
+    .action-btn.delete-btn:hover { background: #d6303120; color: #ff6b6b; border-color: #d63031; }
+    .action-btn.reprocess-btn:hover { background: #6c5ce720; color: #a29bfe; border-color: #6c5ce7; }
   </style>
 </head>
 <body>
@@ -519,14 +542,73 @@
             <span class="name">${esc(u.filename)}</span>
             <span class="badge ${esc(u.status)}">${esc(badgeText)}</span>
           </button>
+          <div class="upload-actions">
+            <button type="button" class="action-btn reprocess-btn" title="Reprocess" data-filename="${esc(u.filename)}">&#x1F504;</button>
+            <button type="button" class="action-btn delete-btn" title="Delete" data-filename="${esc(u.filename)}">&#x1F5D1;&#xFE0F;</button>
+          </div>
         </li>`;
           }
         )
         .join('');
 
       uploadsList.querySelectorAll('li[data-id]').forEach((item) => {
-        item.addEventListener('click', () => {
+        item.addEventListener('click', (e) => {
+          // Don't trigger show results if an action button was clicked
+          if (e.target.closest('.action-btn')) return;
           showResults(item.getAttribute('data-id'));
+        });
+      });
+
+      uploadsList.querySelectorAll('.reprocess-btn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const filename = btn.getAttribute('data-filename');
+          btn.disabled = true;
+          try {
+            const res = await fetch('/reprocess/' + encodeURIComponent(filename), { method: 'POST' });
+            if (res.ok) {
+              loadUploads();
+              startPolling();
+              if (currentResultsId === filename) showResults(filename);
+            } else {
+              const data = await res.json().catch(() => ({}));
+              alert('Reprocess failed: ' + (data.error || res.status));
+            }
+          } catch {
+            alert('Network error');
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
+
+      uploadsList.querySelectorAll('.delete-btn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const filename = btn.getAttribute('data-filename');
+          if (!confirm('Delete "' + filename + '"?')) return;
+          btn.disabled = true;
+          try {
+            const res = await fetch('/uploads/' + encodeURIComponent(filename), { method: 'DELETE' });
+            if (res.ok) {
+              if (currentResultsId === filename) {
+                resultsPanel.classList.remove('active');
+                videoPlayer.pause();
+                videoWrap.style.display = 'none';
+                videoPlayer.src = '';
+                currentVideoId = null;
+                currentResultsId = null;
+              }
+              loadUploads();
+            } else {
+              const data = await res.json().catch(() => ({}));
+              alert('Delete failed: ' + (data.error || res.status));
+            }
+          } catch {
+            alert('Network error');
+          } finally {
+            btn.disabled = false;
+          }
         });
       });
     }

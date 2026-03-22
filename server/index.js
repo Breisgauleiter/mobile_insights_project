@@ -242,6 +242,52 @@ app.get('/results/:id', (req, res) => {
   return res.json(job);
 });
 
+// Delete an uploaded video and its results
+app.delete('/uploads/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const videoPath = path.join(uploadDir, filename);
+  const resultPath = path.join(uploadDir, filename + '.json');
+
+  if (!fs.existsSync(videoPath) || filename.endsWith('.json')) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  try {
+    fs.unlinkSync(videoPath);
+    if (fs.existsSync(resultPath)) {
+      fs.unlinkSync(resultPath);
+    }
+    jobs.delete(filename);
+    return res.json({ message: 'Deleted successfully' });
+  } catch (e) {
+    console.error('Failed to delete file:', e);
+    return res.status(500).json({ error: 'Failed to delete file' });
+  }
+});
+
+// Reprocess an existing uploaded video
+app.post('/reprocess/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const videoPath = path.join(uploadDir, filename);
+  const resultPath = path.join(uploadDir, filename + '.json');
+
+  if (!fs.existsSync(videoPath) || filename.endsWith('.json')) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  // Remove old result if exists
+  if (fs.existsSync(resultPath)) {
+    try {
+      fs.unlinkSync(resultPath);
+    } catch (e) {
+      console.error('Failed to remove old result file:', e);
+    }
+  }
+
+  runMLPipeline(filename, videoPath, resultPath);
+  return res.status(202).json({ message: 'Reprocessing started', filename });
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });

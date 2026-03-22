@@ -302,3 +302,101 @@ describe('restoreJobs()', () => {
     expect(resultsRes.body.highlights).toHaveLength(1);
   });
 });
+
+describe('DELETE /uploads/:filename', () => {
+  let uploadedFilename;
+
+  beforeEach(async () => {
+    cleanUploads();
+    const res = await request(app)
+      .post('/upload')
+      .attach('video', Buffer.from('fake video content'), {
+        filename: 'delete-test.mp4',
+        contentType: 'video/mp4',
+      });
+    uploadedFilename = res.body.filename;
+  });
+
+  afterEach(cleanUploads);
+
+  it('should delete an uploaded file and remove the job', async () => {
+    const res = await request(app).delete(`/uploads/${uploadedFilename}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.message).toBe('Deleted successfully');
+    expect(fs.existsSync(path.join(uploadsDir, uploadedFilename))).toBe(false);
+    expect(app._jobs.has(uploadedFilename)).toBe(false);
+  });
+
+  it('should also delete the associated .json result file if present', async () => {
+    const resultPath = path.join(uploadsDir, uploadedFilename + '.json');
+    fs.writeFileSync(resultPath, JSON.stringify({ highlights: [] }));
+    const res = await request(app).delete(`/uploads/${uploadedFilename}`);
+    expect(res.statusCode).toBe(200);
+    expect(fs.existsSync(resultPath)).toBe(false);
+  });
+
+  it('should return 404 when file does not exist', async () => {
+    const res = await request(app).delete('/uploads/nonexistent-file.mp4');
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBe('File not found');
+  });
+
+  it('should block deletion of .json files via path traversal', async () => {
+    const res = await request(app).delete('/uploads/..%2Fpackage.json');
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('should block deletion of .json files directly', async () => {
+    fs.writeFileSync(path.join(uploadsDir, 'results.json'), '{}');
+    const res = await request(app).delete('/uploads/results.json');
+    expect(res.statusCode).toBe(404);
+    fs.unlinkSync(path.join(uploadsDir, 'results.json'));
+  });
+});
+
+describe('POST /reprocess/:filename', () => {
+  let uploadedFilename;
+
+  beforeEach(async () => {
+    cleanUploads();
+    const res = await request(app)
+      .post('/upload')
+      .attach('video', Buffer.from('fake video content'), {
+        filename: 'reprocess-test.mp4',
+        contentType: 'video/mp4',
+      });
+    uploadedFilename = res.body.filename;
+  });
+
+  afterEach(cleanUploads);
+
+  it('should return 202 and start reprocessing', async () => {
+    const res = await request(app).post(`/reprocess/${uploadedFilename}`);
+    expect(res.statusCode).toBe(202);
+    expect(res.body.message).toBe('Reprocessing started');
+    expect(res.body.filename).toBe(uploadedFilename);
+    const job = app._jobs.get(uploadedFilename);
+    expect(job).toBeDefined();
+    expect(['pending', 'processing', 'error']).toContain(job.status);
+  });
+
+  it('should delete old result file before reprocessing', async () => {
+    const resultPath = path.join(uploadsDir, uploadedFilename + '.json');
+    fs.writeFileSync(resultPath, JSON.stringify({ highlights: [{ timestamp: 1 }] }));
+    await request(app).post(`/reprocess/${uploadedFilename}`);
+    expect(fs.existsSync(resultPath)).toBe(false);
+  });
+
+  it('should return 404 for a nonexistent file', async () => {
+    const res = await request(app).post('/reprocess/nonexistent-file.mp4');
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBe('File not found');
+  });
+
+  it('should block reprocessing of .json files', async () => {
+    fs.writeFileSync(path.join(uploadsDir, 'fake.json'), '{}');
+    const res = await request(app).post('/reprocess/fake.json');
+    expect(res.statusCode).toBe(404);
+    fs.unlinkSync(path.join(uploadsDir, 'fake.json'));
+  });
+});
