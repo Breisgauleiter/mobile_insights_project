@@ -302,3 +302,98 @@ describe('restoreJobs()', () => {
     expect(resultsRes.body.highlights).toHaveLength(1);
   });
 });
+
+describe('DELETE /uploads/:filename', () => {
+  afterEach(cleanUploads);
+
+  it('should delete the video file, JSON result, and job entry — 200', async () => {
+    const uploadRes = await request(app)
+      .post('/upload')
+      .attach('video', Buffer.from('fake video content'), {
+        filename: 'delete-me.mp4',
+        contentType: 'video/mp4',
+      });
+    const filename = uploadRes.body.filename;
+
+    const resultPath = path.join(uploadsDir, filename + '.json');
+    fs.writeFileSync(resultPath, JSON.stringify({ highlights: [] }));
+    app._jobs.set(filename, { id: filename, status: 'done', highlights: [] });
+
+    const res = await request(app).delete(`/uploads/${encodeURIComponent(filename)}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.message).toBe('Deleted');
+    expect(fs.existsSync(path.join(uploadsDir, filename))).toBe(false);
+    expect(fs.existsSync(resultPath)).toBe(false);
+    expect(app._jobs.has(filename)).toBe(false);
+  });
+
+  it('should return 404 when the video file does not exist', async () => {
+    const res = await request(app).delete('/uploads/nonexistent-video.mp4');
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 409 when the job is currently processing', async () => {
+    const filename = 'processing-video.mp4';
+    fs.writeFileSync(path.join(uploadsDir, filename), 'fake content');
+    app._jobs.set(filename, { id: filename, status: 'processing', highlights: [] });
+
+    const res = await request(app).delete(`/uploads/${encodeURIComponent(filename)}`);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBeDefined();
+    expect(fs.existsSync(path.join(uploadsDir, filename))).toBe(true);
+  });
+
+  it('should delete without a JSON result file if one does not exist', async () => {
+    const filename = 'no-json.mp4';
+    fs.writeFileSync(path.join(uploadsDir, filename), 'fake content');
+    app._jobs.set(filename, { id: filename, status: 'done', highlights: [] });
+
+    const res = await request(app).delete(`/uploads/${encodeURIComponent(filename)}`);
+    expect(res.statusCode).toBe(200);
+    expect(fs.existsSync(path.join(uploadsDir, filename))).toBe(false);
+  });
+});
+
+describe('POST /reprocess/:filename', () => {
+  afterEach(cleanUploads);
+
+  it('should delete old JSON result, start ML pipeline, and return 202', async () => {
+    const uploadRes = await request(app)
+      .post('/upload')
+      .attach('video', Buffer.from('fake video content'), {
+        filename: 'reprocess-me.mp4',
+        contentType: 'video/mp4',
+      });
+    const filename = uploadRes.body.filename;
+
+    const resultPath = path.join(uploadsDir, filename + '.json');
+    fs.writeFileSync(resultPath, JSON.stringify({ highlights: [{ timestamp: 1, score: 10 }] }));
+    app._jobs.set(filename, { id: filename, status: 'done', highlights: [] });
+
+    const res = await request(app).post(`/reprocess/${encodeURIComponent(filename)}`);
+    expect(res.statusCode).toBe(202);
+    expect(res.body.message).toBe('Reprocessing started');
+    expect(fs.existsSync(resultPath)).toBe(false);
+
+    const job = app._jobs.get(filename);
+    expect(job).toBeDefined();
+    expect(job.status).toBe('processing');
+  });
+
+  it('should return 404 when the video file does not exist', async () => {
+    const res = await request(app).post('/reprocess/ghost-file.mp4');
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 409 when the job is currently processing', async () => {
+    const filename = 'still-processing.mp4';
+    fs.writeFileSync(path.join(uploadsDir, filename), 'fake content');
+    app._jobs.set(filename, { id: filename, status: 'processing', highlights: [] });
+
+    const res = await request(app).post(`/reprocess/${encodeURIComponent(filename)}`);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBeDefined();
+  });
+});

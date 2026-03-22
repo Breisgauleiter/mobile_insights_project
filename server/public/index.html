@@ -210,7 +210,6 @@
     }
 
     .results-panel .close-btn {
-      float: right;
       background: none;
       border: none;
       color: #636e72;
@@ -219,6 +218,27 @@
     }
 
     .results-panel .close-btn:hover { color: #fff; }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+
+    .icon-btn {
+      background: none;
+      border: none;
+      color: #636e72;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 4px 6px;
+      border-radius: 4px;
+    }
+
+    .icon-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
+    .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
     .highlight-card {
       display: flex;
@@ -347,7 +367,10 @@
 
     <!-- Results panel -->
     <div class="results-panel" id="resultsPanel">
-      <button class="close-btn" id="closeResults">&times;</button>
+      <div class="panel-header">
+        <button class="icon-btn" id="reprocessBtn" title="Reprocess" disabled>&#x1F504;</button>
+        <button class="close-btn" id="closeResults">&times;</button>
+      </div>
       <h3 id="resultsTitle">Results</h3>
       <div class="video-wrap" id="videoWrap" style="display:none">
         <video id="videoPlayer" controls preload="metadata"></video>
@@ -373,6 +396,7 @@
     const resultsTitle = document.getElementById('resultsTitle');
     const resultsContent = document.getElementById('resultsContent');
     const closeResults = document.getElementById('closeResults');
+    const reprocessBtn = document.getElementById('reprocessBtn');
     const videoWrap = document.getElementById('videoWrap');
     const videoPlayer = document.getElementById('videoPlayer');
 
@@ -513,20 +537,49 @@
             if (u.status === 'processing' && typeof u.progress === 'number') {
               badgeText = u.progress + '%';
             }
+            const isActive = u.status === 'processing' || u.status === 'pending';
             return `
         <li data-id="${esc(u.filename)}">
           <button type="button" class="upload-btn">
             <span class="name">${esc(u.filename)}</span>
             <span class="badge ${esc(u.status)}">${esc(badgeText)}</span>
           </button>
+          <button type="button" class="icon-btn delete-btn" title="Delete" ${isActive ? 'disabled' : ''}>&#x1F5D1;</button>
         </li>`;
           }
         )
         .join('');
 
       uploadsList.querySelectorAll('li[data-id]').forEach((item) => {
-        item.addEventListener('click', () => {
+        item.querySelector('.upload-btn').addEventListener('click', () => {
           showResults(item.getAttribute('data-id'));
+        });
+
+        const delBtn = item.querySelector('.delete-btn');
+        delBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const id = item.getAttribute('data-id');
+          if (!confirm(`Delete "${id}"? This cannot be undone.`)) return;
+          try {
+            const res = await fetch('/uploads/' + encodeURIComponent(id), { method: 'DELETE' });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              alert('Delete failed: ' + (data.error || res.status));
+              return;
+            }
+            if (currentResultsId === id) {
+              resultsPanel.classList.remove('active');
+              videoPlayer.pause();
+              videoWrap.style.display = 'none';
+              videoPlayer.src = '';
+              currentVideoId = null;
+              currentResultsId = null;
+              reprocessBtn.disabled = true;
+            }
+            loadUploads();
+          } catch {
+            alert('Failed to delete upload.');
+          }
         });
       });
     }
@@ -550,6 +603,7 @@
       resultsPanel.classList.add('active');
       resultsTitle.textContent = id;
       resultsContent.innerHTML = '<div class="status-msg">Loading...</div>';
+      reprocessBtn.disabled = true;
 
       // Load video player
       if (currentVideoId !== id) {
@@ -568,6 +622,7 @@
         const data = await res.json();
 
         if (data.status === 'processing' || data.status === 'pending') {
+          reprocessBtn.disabled = true;
           const pct = typeof data.progress === 'number' ? data.progress : 0;
           const stageMap = {
             starting: 'Starting...',
@@ -596,6 +651,7 @@
         }
 
         if (data.status === 'error') {
+          reprocessBtn.disabled = false;
           resultsContent.innerHTML =
             '<div class="no-highlights">&#9888; Error: ' +
             esc(data.error || 'unknown error') +
@@ -604,12 +660,14 @@
         }
 
         if (!data.highlights || !data.highlights.length) {
+          reprocessBtn.disabled = false;
           resultsContent.innerHTML =
             '<div class="no-highlights">No highlights detected</div>';
           return;
         }
 
         const highlights = data.highlights;
+        reprocessBtn.disabled = false;
         const maxScore = highlights.reduce(
           (max, h) => (typeof h.score === 'number' && h.score > max ? h.score : max), 0
         );
@@ -658,6 +716,26 @@
       videoPlayer.src = '';
       currentVideoId = null;
       currentResultsId = null;
+      reprocessBtn.disabled = true;
+    });
+
+    reprocessBtn.addEventListener('click', async () => {
+      if (!currentResultsId) return;
+      reprocessBtn.disabled = true;
+      try {
+        const res = await fetch('/reprocess/' + encodeURIComponent(currentResultsId), { method: 'POST' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(`Reprocess failed: ${data.error || String(res.status)}`);
+          reprocessBtn.disabled = false;
+          return;
+        }
+        loadUploads();
+        showResults(currentResultsId);
+      } catch {
+        alert('Failed to start reprocessing.');
+        reprocessBtn.disabled = false;
+      }
     });
 
     // Helpers
