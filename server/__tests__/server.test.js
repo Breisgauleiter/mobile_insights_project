@@ -4,10 +4,23 @@ const fs = require('fs');
 const app = require('../index');
 
 const uploadsDir = path.join(__dirname, '..', 'uploads');
+const clipsDir = app._clipsDir;
 
 function cleanUploads() {
   fs.readdirSync(uploadsDir).forEach((file) => {
-    if (file !== '.gitkeep') fs.unlinkSync(path.join(uploadsDir, file));
+    const filePath = path.join(uploadsDir, file);
+    if (file === '.gitkeep') return;
+    if (fs.statSync(filePath).isDirectory()) {
+      // Clean contents of subdirectories (e.g. .clips) but keep the dir
+      fs.readdirSync(filePath).forEach((sub) => {
+        const subPath = path.join(filePath, sub);
+        if (fs.statSync(subPath).isFile()) {
+          fs.unlinkSync(subPath);
+        }
+      });
+    } else {
+      fs.unlinkSync(filePath);
+    }
   });
   app._jobs.clear();
 }
@@ -395,5 +408,133 @@ describe('POST /reprocess/:filename', () => {
     const res = await request(app).post(`/reprocess/${encodeURIComponent(filename)}`);
     expect(res.statusCode).toBe(409);
     expect(res.body.error).toBeDefined();
+  });
+});
+
+describe('GET /clip/:filename', () => {
+  const testVideo = 'clip-test-video.mp4';
+
+  beforeEach(() => {
+    cleanUploads();
+    fs.writeFileSync(path.join(uploadsDir, testVideo), 'fake video content');
+    app._jobs.set(testVideo, { id: testVideo, status: 'done', highlights: [{ timestamp: 10, score: 50 }] });
+  });
+
+  afterEach(cleanUploads);
+
+  it('should return 404 when video does not exist', async () => {
+    const res = await request(app).get('/clip/nonexistent.mp4?t=10');
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 400 when t param is missing', async () => {
+    const res = await request(app).get(`/clip/${testVideo}`);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/param "t"/i);
+  });
+
+  it('should return 400 when t param is not a valid number', async () => {
+    const res = await request(app).get(`/clip/${testVideo}?t=abc`);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/param "t"/i);
+  });
+
+  it('should return 400 when t is negative', async () => {
+    const res = await request(app).get(`/clip/${testVideo}?t=-5`);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/param "t"/i);
+  });
+
+  it('should serve a cached clip if it already exists', async () => {
+    const cacheKey = `${testVideo}_t10_b5_a5.mp4`;
+    const cachePath = path.join(clipsDir, cacheKey);
+    const fakeClipContent = 'fake clip data';
+    fs.writeFileSync(cachePath, fakeClipContent);
+
+    const res = await request(app).get(`/clip/${testVideo}?t=10`);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toMatch(/video\/mp4/);
+    expect(res.headers['content-disposition']).toContain(cacheKey);
+  });
+
+  it('should clamp before/after params to 0-30 and use cached clip', async () => {
+    // before=60 clamps to 30, after=-1 clamps to 0
+    const cacheKey = `${testVideo}_t10_b30_a0.mp4`;
+    const cachePath = path.join(clipsDir, cacheKey);
+    fs.writeFileSync(cachePath, 'fake clamped clip');
+
+    const res = await request(app).get(`/clip/${testVideo}?t=10&before=60&after=-1`);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-disposition']).toContain(cacheKey);
+  });
+
+  it('should block access to .json files', async () => {
+    fs.writeFileSync(path.join(uploadsDir, 'secret.json'), '{}');
+    const res = await request(app).get('/clip/secret.json?t=10');
+    expect(res.statusCode).toBe(404);
+    fs.unlinkSync(path.join(uploadsDir, 'secret.json'));
+  });
+});
+
+describe('GET /clips/zip/:filename', () => {
+  const testVideo = 'zip-test-video.mp4';
+
+  beforeEach(() => {
+    cleanUploads();
+    fs.writeFileSync(path.join(uploadsDir, testVideo), 'fake video content');
+  });
+
+  afterEach(cleanUploads);
+
+  it('should return 404 when video does not exist', async () => {
+    const res = await request(app).get('/clips/zip/nonexistent.mp4');
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 404 when no highlights exist for the video', async () => {
+    app._jobs.set(testVideo, { id: testVideo, status: 'done', highlights: [] });
+    const res = await request(app).get(`/clips/zip/${testVideo}`);
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toMatch(/highlights/i);
+  });
+
+  it('should return a zip archive when pre-cached clips exist', async () => {
+    app._jobs.set(testVideo, {
+      id: testVideo,
+      status: 'done',
+      highlights: [{ timestamp: 5, score: 80 }],
+    });
+
+    // Pre-create cached clip so ffmpeg is not needed
+    const cacheKey = `${testVideo}_t5_b5_a5.mp4`;
+    fs.writeFileSync(path.join(clipsDir, cacheKey), 'fake clip data');
+
+    const res = await request(app).get(`/clips/zip/${testVideo}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/zip/);
+    expect(res.headers['content-disposition']).toContain('_highlights.zip');
+  });
+});
+
+describe('Clip cleanup on DELETE /uploads/:filename', () => {
+  afterEach(cleanUploads);
+
+  it('should delete cached clips when a video is deleted', async () => {
+    const filename = 'video-with-clips.mp4';
+    fs.writeFileSync(path.join(uploadsDir, filename), 'fake video');
+    app._jobs.set(filename, { id: filename, status: 'done', highlights: [] });
+
+    // Create fake cached clips
+    const clipA = path.join(clipsDir, `${filename}_t5_b5_a5.mp4`);
+    const clipB = path.join(clipsDir, `${filename}_t30_b5_a5.mp4`);
+    fs.writeFileSync(clipA, 'clip A');
+    fs.writeFileSync(clipB, 'clip B');
+
+    const res = await request(app).delete(`/uploads/${encodeURIComponent(filename)}`);
+    expect(res.statusCode).toBe(200);
+    expect(fs.existsSync(clipA)).toBe(false);
+    expect(fs.existsSync(clipB)).toBe(false);
   });
 });

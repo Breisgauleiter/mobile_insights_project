@@ -243,7 +243,7 @@
     .highlight-card {
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 12px;
       padding: 12px;
       background: #0f0f23;
       border-radius: 8px;
@@ -368,6 +368,7 @@
     <!-- Results panel -->
     <div class="results-panel" id="resultsPanel">
       <div class="panel-header">
+        <button class="icon-btn" id="exportAllBtn" title="Export all clips as zip" disabled>&#x1F4E6; Export all</button>
         <button class="icon-btn" id="reprocessBtn" title="Reprocess" disabled>&#x1F504;</button>
         <button class="close-btn" id="closeResults">&times;</button>
       </div>
@@ -399,6 +400,7 @@
     const reprocessBtn = document.getElementById('reprocessBtn');
     const videoWrap = document.getElementById('videoWrap');
     const videoPlayer = document.getElementById('videoPlayer');
+    const exportAllBtn = document.getElementById('exportAllBtn');
 
     let pollTimer = null;
     let currentVideoId = null;
@@ -604,6 +606,7 @@
       resultsTitle.textContent = id;
       resultsContent.innerHTML = '<div class="status-msg">Loading...</div>';
       reprocessBtn.disabled = true;
+      exportAllBtn.disabled = true;
 
       // Load video player
       if (currentVideoId !== id) {
@@ -623,6 +626,7 @@
 
         if (data.status === 'processing' || data.status === 'pending') {
           reprocessBtn.disabled = true;
+          exportAllBtn.disabled = true;
           const pct = typeof data.progress === 'number' ? data.progress : 0;
           const stageMap = {
             starting: 'Starting...',
@@ -652,6 +656,7 @@
 
         if (data.status === 'error') {
           reprocessBtn.disabled = false;
+          exportAllBtn.disabled = true;
           resultsContent.innerHTML =
             '<div class="no-highlights">&#9888; Error: ' +
             esc(data.error || 'unknown error') +
@@ -661,6 +666,7 @@
 
         if (!data.highlights || !data.highlights.length) {
           reprocessBtn.disabled = false;
+          exportAllBtn.disabled = true;
           resultsContent.innerHTML =
             '<div class="no-highlights">No highlights detected</div>';
           return;
@@ -668,6 +674,7 @@
 
         const highlights = data.highlights;
         reprocessBtn.disabled = false;
+        exportAllBtn.disabled = false;
         const maxScore = highlights.reduce(
           (max, h) => (typeof h.score === 'number' && h.score > max ? h.score : max), 0
         );
@@ -688,13 +695,15 @@
             <div class="score-bar"><div class="fill" style="width:${barWidth}%"></div></div>
             <div class="score-val">${raw}</div>
             ${sources ? `<div class="sources">${esc(sources)}</div>` : ''}
+            <a class="icon-btn clip-btn" href="/clip/${encodeURIComponent(id)}?t=${ts}" download title="Export clip">&#x2702;&#xFE0F;</a>
           </div>`;
           })
           .join('');
 
-        // Attach click handlers to seek video
+        // Attach click handlers to seek video (exclude clip button clicks)
         resultsContent.querySelectorAll('.highlight-card[data-time]').forEach((card) => {
-          card.addEventListener('click', () => {
+          card.addEventListener('click', (e) => {
+            if (e.target.closest('.clip-btn')) return;
             const time = parseFloat(card.getAttribute('data-time'));
             if (!isNaN(time)) {
               videoPlayer.currentTime = time;
@@ -717,6 +726,7 @@
       currentVideoId = null;
       currentResultsId = null;
       reprocessBtn.disabled = true;
+      exportAllBtn.disabled = true;
     });
 
     reprocessBtn.addEventListener('click', async () => {
@@ -736,6 +746,11 @@
         alert('Failed to start reprocessing.');
         reprocessBtn.disabled = false;
       }
+    });
+
+    exportAllBtn.addEventListener('click', () => {
+      if (!currentResultsId) return;
+      window.location.href = '/clips/zip/' + encodeURIComponent(currentResultsId);
     });
 
     // Helpers
