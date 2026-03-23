@@ -630,6 +630,63 @@
     .highlight-card:hover {
       background: #1a1a2e;
     }
+
+    /* Gold chart */
+    .gold-chart-wrap {
+      position: relative;
+      background: #0f0f23;
+      border-radius: 8px;
+      border: 1px solid #2a2a4a;
+      margin-bottom: 12px;
+      overflow: hidden;
+      height: 180px;
+    }
+
+    #goldCanvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: crosshair;
+    }
+
+    .gold-legend {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      font-size: 12px;
+      color: #a0a0c0;
+      margin-bottom: 12px;
+    }
+
+    .gold-legend span {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .gold-legend .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+
+    .gold-legend .dot.gold-team1 { background: #00b894; }
+    .gold-legend .dot.gold-team2 { background: #d63031; }
+
+    .gold-status {
+      text-align: center;
+      color: #636e72;
+      font-size: 13px;
+      padding: 8px 0;
+    }
+
+    .gold-hint {
+      text-align: center;
+      color: #636e72;
+      font-size: 11px;
+      margin-bottom: 8px;
+    }
   </style>
 </head>
 <body>
@@ -669,6 +726,7 @@
       >
         <button class="result-tab active" data-tab="highlights" aria-label="Highlights tab" role="tab" aria-selected="true" tabindex="0">&#x1F3AF; Highlights</button>
         <button class="result-tab" data-tab="minimap" aria-label="Minimap tab" role="tab" aria-selected="false" tabindex="-1">&#x1F5FA;&#xFE0F; Minimap</button>
+        <button class="result-tab" data-tab="gold" aria-label="Gold chart tab" role="tab" aria-selected="false" tabindex="-1">&#x1F4B0; Gold</button>
       </div>
       <div id="videoAnnotationSection" style="display:none">
         <div id="annotationToolbar" class="annotation-toolbar">
@@ -723,6 +781,18 @@
         </div>
         <ul class="minimap-events" id="minimapEventsList"></ul>
       </div>
+      <!-- Gold chart tab content -->
+      <div id="goldContent" style="display:none">
+        <div class="gold-chart-wrap">
+          <canvas id="goldCanvas"></canvas>
+        </div>
+        <div class="gold-legend">
+          <span><span class="dot gold-team1"></span> Team 1 ahead</span>
+          <span><span class="dot gold-team2"></span> Team 2 ahead</span>
+        </div>
+        <p class="gold-hint">Click on the chart to seek to that moment in the video</p>
+        <div class="gold-status" id="goldStatus"></div>
+      </div>
     </div>
 
     <!-- Uploads list -->
@@ -743,6 +813,8 @@
     const resultsTitle = document.getElementById('resultsTitle');
     const resultsContent = document.getElementById('resultsContent');
     const minimapContent = document.getElementById('minimapContent');
+    const goldContent = document.getElementById('goldContent');
+    const goldStatus = document.getElementById('goldStatus');
     const closeResults = document.getElementById('closeResults');
     const reprocessBtn = document.getElementById('reprocessBtn');
     const videoAnnotationSection = document.getElementById('videoAnnotationSection');
@@ -765,6 +837,11 @@
     let minimapEvents = [];
     let minimapFrameIndex = 0;
 
+    // Gold chart state
+    let goldTimeline = [];
+    let goldCanvasEl = null;
+    let goldCanvasCtx = null;
+
     // Tab switching — click handler + aria-selected state management
     document.querySelectorAll('.result-tab').forEach((tab) => {
       tab.addEventListener('click', () => {
@@ -778,12 +855,24 @@
         if (activeTab === 'highlights') {
           resultsContent.style.display = '';
           minimapContent.style.display = 'none';
-        } else {
+          goldContent.style.display = 'none';
+        } else if (activeTab === 'minimap') {
           resultsContent.style.display = 'none';
           minimapContent.style.display = '';
+          goldContent.style.display = 'none';
           // Only fetch if minimap data hasn't been loaded yet for this video
           if (currentResultsId && minimapTimeline.length === 0) {
             loadMinimap(currentResultsId);
+          }
+        } else if (activeTab === 'gold') {
+          resultsContent.style.display = 'none';
+          minimapContent.style.display = 'none';
+          goldContent.style.display = '';
+          // Only fetch if gold data hasn't been loaded yet for this video
+          if (currentResultsId && goldTimeline.length === 0) {
+            loadGoldChart(currentResultsId);
+          } else if (goldTimeline.length > 0) {
+            drawGoldChart();
           }
         }
       });
@@ -1051,8 +1140,10 @@
         });
         resultsContent.style.display = '';
         minimapContent.style.display = 'none';
+        goldContent.style.display = 'none';
         minimapTimeline = [];
         minimapEvents = [];
+        goldTimeline = [];
       }
 
       // Load video player
@@ -1196,8 +1287,10 @@
       });
       resultsContent.style.display = '';
       minimapContent.style.display = 'none';
+      goldContent.style.display = 'none';
       minimapTimeline = [];
       minimapEvents = [];
+      goldTimeline = [];
       disableAnnotationMode();
     });
 
@@ -1388,6 +1481,194 @@
         minimapScrubber.value = best;
         minimapTimeLabel.textContent = formatTime(minimapTimeline[best].time);
         drawMinimapFrame(best);
+      }
+    });
+
+    // ====================
+    // GOLD CHART
+    // ====================
+
+    async function loadGoldChart(id) {
+      if (!id) return;
+      goldStatus.textContent = 'Analyzing gold values...';
+      if (goldCanvasCtx) goldCanvasCtx.clearRect(0, 0, goldCanvasEl.width, goldCanvasEl.height);
+
+      try {
+        const res = await fetch('/stats-analysis', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: id }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          goldStatus.textContent = '\u26A0 ' + (data.error || 'Stats analysis failed');
+          return;
+        }
+
+        const data = await res.json();
+        goldTimeline = Array.isArray(data.gold_timeline) ? data.gold_timeline : [];
+
+        if (goldTimeline.length === 0) {
+          goldStatus.textContent = 'No gold data detected in this video';
+          return;
+        }
+
+        goldStatus.textContent = '';
+        drawGoldChart();
+      } catch {
+        goldStatus.textContent = 'Failed to load gold data';
+      }
+    }
+
+    function initGoldCanvas() {
+      if (goldCanvasEl) return;
+      goldCanvasEl = document.getElementById('goldCanvas');
+      goldCanvasCtx = goldCanvasEl.getContext('2d');
+      const wrap = goldCanvasEl.parentElement;
+      goldCanvasEl.width = wrap.clientWidth || 600;
+      goldCanvasEl.height = wrap.clientHeight || 180;
+    }
+
+    function drawGoldChart() {
+      initGoldCanvas();
+      if (!goldCanvasEl || goldTimeline.length === 0) return;
+
+      const wrap = goldCanvasEl.parentElement;
+      goldCanvasEl.width = wrap.clientWidth || 600;
+      goldCanvasEl.height = wrap.clientHeight || 180;
+
+      const ctx = goldCanvasCtx;
+      const W = goldCanvasEl.width;
+      const H = goldCanvasEl.height;
+      const PAD = { top: 16, bottom: 24, left: 8, right: 8 };
+      const chartW = W - PAD.left - PAD.right;
+      const chartH = H - PAD.top - PAD.bottom;
+
+      ctx.clearRect(0, 0, W, H);
+
+      const diffs = goldTimeline.map((e) => e.gold_diff);
+      const maxAbs = Math.max(1, ...diffs.map(Math.abs));
+      const times = goldTimeline.map((e) => e.time);
+      const maxTime = Math.max(1, times[times.length - 1]);
+
+      // Helper: map time → x pixel
+      function tx(t) { return PAD.left + (t / maxTime) * chartW; }
+      // Helper: map diff value → y pixel (positive = up)
+      function dy(d) { return PAD.top + chartH / 2 - (d / maxAbs) * (chartH / 2 - 2); }
+
+      const zeroY = dy(0);
+
+      // Draw grid lines
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const x = PAD.left + (i / 4) * chartW;
+        ctx.beginPath();
+        ctx.moveTo(x, PAD.top);
+        ctx.lineTo(x, PAD.top + chartH);
+        ctx.stroke();
+      }
+
+      // Draw zero line
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(PAD.left, zeroY);
+      ctx.lineTo(PAD.left + chartW, zeroY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Build path
+      const pts = goldTimeline.map((e) => ({ x: tx(e.time), y: dy(e.gold_diff) }));
+
+      // Fill area above zero (team1 ahead) — green
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, zeroY);
+      for (const p of pts) {
+        ctx.lineTo(p.x, Math.min(p.y, zeroY));
+      }
+      ctx.lineTo(pts[pts.length - 1].x, zeroY);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(0,184,148,0.35)';
+      ctx.fill();
+
+      // Fill area below zero (team2 ahead) — red
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, zeroY);
+      for (const p of pts) {
+        ctx.lineTo(p.x, Math.max(p.y, zeroY));
+      }
+      ctx.lineTo(pts[pts.length - 1].x, zeroY);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(214,48,49,0.35)';
+      ctx.fill();
+
+      // Draw line
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      ctx.strokeStyle = '#a29bfe';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Draw dots
+      ctx.fillStyle = '#6c5ce7';
+      for (const p of pts) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Time labels on x axis
+      ctx.fillStyle = '#636e72';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      const labelCount = Math.min(5, goldTimeline.length);
+      for (let i = 0; i <= labelCount; i++) {
+        const t = (i / labelCount) * maxTime;
+        const x = tx(t);
+        ctx.fillText(formatTime(t), x, H - 4);
+      }
+
+      // Draw current-time indicator
+      const curVideoTime = videoPlayer.currentTime;
+      if (curVideoTime >= 0 && curVideoTime <= maxTime) {
+        const cx = tx(curVideoTime);
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(cx, PAD.top);
+        ctx.lineTo(cx, PAD.top + chartH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    // Click on gold chart → seek video to that time
+    document.getElementById('goldCanvas').addEventListener('click', (e) => {
+      if (goldTimeline.length === 0 || !goldCanvasEl) return;
+      const rect = goldCanvasEl.getBoundingClientRect();
+      const PAD_LEFT = 8;
+      const PAD_RIGHT = 8;
+      const chartW = goldCanvasEl.width - PAD_LEFT - PAD_RIGHT;
+      const xRel = (e.clientX - rect.left) * (goldCanvasEl.width / rect.width) - PAD_LEFT;
+      const maxTime = goldTimeline[goldTimeline.length - 1].time;
+      const seekTime = Math.max(0, (xRel / chartW) * maxTime);
+      videoPlayer.currentTime = seekTime;
+      videoPlayer.play();
+      videoAnnotationSection.scrollIntoView({ behavior: 'smooth' });
+      drawGoldChart();
+    });
+
+    // Redraw gold chart on timeupdate to keep position indicator fresh
+    videoPlayer.addEventListener('timeupdate', () => {
+      if (activeTab === 'gold' && goldTimeline.length > 0) {
+        drawGoldChart();
       }
     });
 

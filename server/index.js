@@ -42,6 +42,7 @@ function restoreJobs() {
 const ML_SCRIPT = path.resolve(__dirname, '..', 'ml', 'highlight_detector.py');
 const MINIMAP_SCRIPT = path.resolve(__dirname, '..', 'ml', 'minimap_tracker.py');
 const TRACKER_SCRIPT = path.resolve(__dirname, '..', 'ml', 'object_tracker.py');
+const STATS_SCRIPT = path.resolve(__dirname, '..', 'ml', 'stats_extractor.py');
 const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
 
 // ML performance tuning (set via env for local dev, 0 = full quality for prod)
@@ -263,6 +264,7 @@ app._deleteClipsForVideo = deleteClipsForVideo;
 app._deleteTracksForVideo = deleteTracksForVideo;
 app._getTrackCachePath = getTrackCachePath;
 app._minimapScript = MINIMAP_SCRIPT;
+app._statsScript = STATS_SCRIPT;
 
 // Rate limiter for minimap analysis (spawns a Python subprocess)
 const minimapRateLimit = rateLimit({
@@ -384,11 +386,35 @@ app.get('/uploads', (req, res) => {
   res.json({ uploads });
 });
 
+// Rate limiter for the results endpoint (reads stats cache from disk)
+const resultsRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many results requests, please try again later.' },
+});
+
 // Get highlight results for a video
-app.get('/results/:id', (req, res) => {
+app.get('/results/:id', resultsRateLimit, (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job) {
     return res.status(404).json({ error: 'No results found for this id.' });
+  }
+  // Serve gold_timeline from in-memory cache when available
+  if (!Array.isArray(job.gold_timeline)) {
+    const statsCacheFile = path.join(uploadDir, req.params.id + '_stats.json');
+    if (fs.existsSync(statsCacheFile)) {
+      try {
+        const raw = fs.readFileSync(statsCacheFile, 'utf-8');
+        const data = JSON.parse(raw);
+        job.gold_timeline = Array.isArray(data.gold_timeline) ? data.gold_timeline : [];
+      } catch {
+        job.gold_timeline = [];
+      }
+    } else {
+      job.gold_timeline = [];
+    }
   }
   return res.json(job);
 });
@@ -488,6 +514,11 @@ app.delete('/uploads/:filename', (req, res) => {
     try { fs.unlinkSync(minimapCacheFile); } catch { /* ignore */ }
   }
 
+  const statsCacheFile = path.join(uploadDir, filename + '_stats.json');
+  if (fs.existsSync(statsCacheFile)) {
+    try { fs.unlinkSync(statsCacheFile); } catch { /* ignore */ }
+  }
+
   deleteClipsForVideo(filename);
   deleteTracksForVideo(filename);
   jobs.delete(filename);
@@ -571,6 +602,81 @@ app.post('/minimap-analysis', minimapRateLimit, (req, res) => {
       res.json(result);
     } catch {
       res.status(500).json({ error: 'Failed to parse minimap results' });
+    }
+  });
+
+  child.on('error', (err) => {
+    res.status(500).json({ error: err.message });
+  });
+});
+
+// Rate limiter for stats analysis (spawns a Python subprocess)
+const statsRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many stats analysis requests, please try again later.' },
+});
+
+/**
+ * Run the stats extractor Python script for a video and return the results.
+ * Results are cached as <filename>_stats.json in the uploads directory.
+ *
+ * POST /stats-analysis
+ * Body: { filename: string }
+ * Response: { gold_timeline: Array<{time, team1_gold?, team2_gold?, gold_diff}> }
+ */
+app.post('/stats-analysis', statsRateLimit, (req, res) => {
+  const { filename } = req.body || {};
+  if (!filename || typeof filename !== 'string') {
+    return res.status(400).json({ error: 'filename is required' });
+  }
+
+  const safeFilename = path.basename(filename);
+  const videoPath = path.join(uploadDir, safeFilename);
+
+  if (!fs.existsSync(videoPath) || safeFilename.endsWith('.json')) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+
+  const cacheFile = path.join(uploadDir, safeFilename + '_stats.json');
+
+  // Return cached result if available
+  if (fs.existsSync(cacheFile)) {
+    try {
+      const raw = fs.readFileSync(cacheFile, 'utf-8');
+      return res.json(JSON.parse(raw));
+    } catch {
+      // Cache corrupt — fall through to regenerate
+    }
+  }
+
+  const child = spawn(PYTHON_BIN, [STATS_SCRIPT, '--video', videoPath], { stdio: 'pipe' });
+  let stdout = '';
+  let stderr = '';
+
+  child.stdout.on('data', (d) => { stdout += d.toString(); });
+  child.stderr.on('data', (d) => { stderr += d.toString(); });
+
+  child.on('close', (code) => {
+    if (code !== 0) {
+      res.status(500).json({
+        error: stderr.trim() || `Stats analysis failed with exit code ${code}`,
+      });
+      return;
+    }
+    try {
+      const result = JSON.parse(stdout);
+      try { fs.writeFileSync(cacheFile, JSON.stringify(result)); } catch { /* ignore cache write errors */ }
+      // Populate in-memory cache so GET /results/:id serves from memory
+      const job = jobs.get(safeFilename);
+      if (job && Array.isArray(result.gold_timeline)) {
+        job.gold_timeline = result.gold_timeline;
+      }
+      res.json(result);
+    } catch {
+      res.status(500).json({ error: 'Failed to parse stats results' });
     }
   });
 
