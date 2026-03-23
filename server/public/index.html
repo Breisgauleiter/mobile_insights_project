@@ -837,6 +837,9 @@
     let regionSelection = null;   // {x, y, w, h} in video pixel coords
     let regionDragStart = null;   // mouse-down position while drawing
     let regionStartTime = 0;      // game start time in seconds
+    // Separate hidden video element for frame capture — avoids disrupting
+    // the main player's buffering and playback.
+    let captureVideo = null;
 
     // Tab switching — click handler + aria-selected state management
     document.querySelectorAll('.result-tab').forEach((tab) => {
@@ -1337,27 +1340,46 @@
         });
         return;
       }
+
+      // Create (or re-use) a separate hidden video element for frame capture
+      if (!captureVideo || captureVideo.src !== videoPlayer.src) {
+        if (captureVideo) { captureVideo.pause(); captureVideo.removeAttribute('src'); captureVideo.load(); }
+        captureVideo = document.createElement('video');
+        captureVideo.preload = 'auto';
+        captureVideo.muted = true;
+        captureVideo.playsInline = true;
+        captureVideo.style.display = 'none';
+        captureVideo.src = videoPlayer.src;
+        document.body.appendChild(captureVideo);
+      }
+
       const dur = videoPlayer.duration;
       regionTimeScrubber.min = 0;
       regionTimeScrubber.max = Math.floor(dur);
-      // Default to ~30s or half the video, whichever is smaller
       const defaultTime = Math.min(30, Math.floor(dur / 2));
       regionTimeScrubber.value = defaultTime;
       regionStartTime = defaultTime;
-      seekAndCapture(defaultTime);
+
+      // Wait for capture video to have enough data, then seek
+      if (captureVideo.readyState >= 1) {
+        seekAndCapture(defaultTime);
+      } else {
+        captureVideo.addEventListener('loadedmetadata', () => seekAndCapture(defaultTime), { once: true });
+      }
     }
 
     function seekAndCapture(timeSec) {
+      if (!captureVideo) return;
       regionStartTime = timeSec;
       regionTimeLabel.textContent = formatTime(timeSec);
-      const vw = videoPlayer.videoWidth;
-      const vh = videoPlayer.videoHeight;
+      const vw = captureVideo.videoWidth || videoPlayer.videoWidth;
+      const vh = captureVideo.videoHeight || videoPlayer.videoHeight;
       regionSelectCanvas.width = vw;
       regionSelectCanvas.height = vh;
-      videoPlayer.currentTime = timeSec;
-      videoPlayer.addEventListener('seeked', function onSeeked() {
-        videoPlayer.removeEventListener('seeked', onSeeked);
-        regionSelectCtx.drawImage(videoPlayer, 0, 0, vw, vh);
+      captureVideo.currentTime = timeSec;
+      captureVideo.addEventListener('seeked', function onSeeked() {
+        captureVideo.removeEventListener('seeked', onSeeked);
+        regionSelectCtx.drawImage(captureVideo, 0, 0, vw, vh);
         regionFrameImage = regionSelectCtx.getImageData(0, 0, vw, vh);
         drawRegionOverlay();
       }, { once: true });
