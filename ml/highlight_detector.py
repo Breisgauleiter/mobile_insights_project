@@ -151,7 +151,7 @@ def detect_highlights(
     enable_volume: bool = True,
     enable_killfeed: bool = True,
     debug: bool = False,
-    kills_out: list | None = None,
+    kills_out: list[dict] | None = None,
 ) -> list[dict]:
     """Run the multi-signal highlight detection pipeline.
 

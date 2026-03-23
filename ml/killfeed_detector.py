@@ -129,9 +129,11 @@ def detect_killfeed(
     Args:
         video_path: Path to the input video file.
         sample_fps: Frames per second to sample for OCR (default: 1.5).
+            Must be greater than zero.
         dedup_window: Seconds to suppress repeated ``(killer, victim)``
             pairs (default: 3.0).
         max_events: Maximum number of kill events to return (default: 50).
+            Must be greater than zero.
 
     Returns:
         List of dicts ordered by appearance, each containing:
@@ -146,7 +148,14 @@ def detect_killfeed(
         ImportError: If ``pytesseract`` is not installed.
         FileNotFoundError: If ``video_path`` does not exist on disk.
         RuntimeError: If the video cannot be opened or reports invalid FPS.
+        ValueError: If ``sample_fps`` is not positive or ``max_events`` is not
+            positive.
     """
+    if sample_fps <= 0:
+        raise ValueError(f"sample_fps must be greater than zero, got {sample_fps}")
+    if max_events <= 0:
+        raise ValueError(f"max_events must be greater than zero, got {max_events}")
+
     try:
         import pytesseract as _pytesseract
     except ImportError as exc:
@@ -176,6 +185,7 @@ def detect_killfeed(
     # Track last-seen timestamp for each (killer, victim) pair
     recent: dict[tuple[str, str], float] = {}
     frame_idx = 0
+    _tesseract_error_logged = False
 
     while True:
         ret, frame = cap.read()
@@ -191,7 +201,17 @@ def detect_killfeed(
                 ocr_text: str = _pytesseract.image_to_string(
                     processed, config='--psm 6 --oem 1'
                 )
-            except Exception:
+            except _pytesseract.TesseractNotFoundError as exc:
+                # Tesseract binary is missing — no point continuing
+                cap.release()
+                raise RuntimeError(
+                    "Tesseract binary not found. "
+                    "Install it from https://github.com/tesseract-ocr/tesseract"
+                ) from exc
+            except Exception as exc:
+                if not _tesseract_error_logged:
+                    print(f"[warn] OCR error on frame {frame_idx}: {exc}", file=sys.stderr)
+                    _tesseract_error_logged = True
                 frame_idx += 1
                 continue
 

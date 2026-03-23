@@ -225,3 +225,41 @@ class TestDetectKillfeed:
         )
         times = [e["time"] for e in events]
         assert times == sorted(times)
+
+    def test_zero_sample_fps_raises_value_error(self, simple_video, monkeypatch):
+        """sample_fps=0 must raise ValueError before processing begins."""
+        self._inject_pytesseract(monkeypatch, "")
+        with pytest.raises(ValueError, match="sample_fps"):
+            killfeed_detector.detect_killfeed(simple_video, sample_fps=0)
+
+    def test_negative_sample_fps_raises_value_error(self, simple_video, monkeypatch):
+        """Negative sample_fps must raise ValueError."""
+        self._inject_pytesseract(monkeypatch, "")
+        with pytest.raises(ValueError, match="sample_fps"):
+            killfeed_detector.detect_killfeed(simple_video, sample_fps=-1.0)
+
+    def test_zero_max_events_raises_value_error(self, simple_video, monkeypatch):
+        """max_events=0 must raise ValueError."""
+        self._inject_pytesseract(monkeypatch, "")
+        with pytest.raises(ValueError, match="max_events"):
+            killfeed_detector.detect_killfeed(simple_video, max_events=0)
+
+    def test_negative_max_events_raises_value_error(self, simple_video, monkeypatch):
+        """Negative max_events must raise ValueError."""
+        self._inject_pytesseract(monkeypatch, "")
+        with pytest.raises(ValueError, match="max_events"):
+            killfeed_detector.detect_killfeed(simple_video, max_events=-5)
+
+    def test_missing_tesseract_binary_raises_runtime_error(self, simple_video, monkeypatch):
+        """TesseractNotFoundError from pytesseract is re-raised as RuntimeError."""
+        mock_tess = MagicMock()
+        # TesseractNotFoundError must be a real exception class
+        class TesseractNotFoundError(Exception):
+            pass
+
+        mock_tess.TesseractNotFoundError = TesseractNotFoundError
+        mock_tess.image_to_string.side_effect = TesseractNotFoundError("tesseract not found")
+        monkeypatch.setitem(sys.modules, "pytesseract", mock_tess)
+
+        with pytest.raises(RuntimeError, match="Tesseract binary not found"):
+            killfeed_detector.detect_killfeed(simple_video, sample_fps=30.0)

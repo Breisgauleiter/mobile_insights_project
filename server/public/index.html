@@ -760,6 +760,38 @@
       }
     }
 
+    // Render kill timeline into a container element
+    function renderKillTimeline(kills, container) {
+      const killHtml = kills.map((k) => {
+        const t = Number.isFinite(Number(k.time)) ? Number(k.time) : 0;
+        const assistStr = k.assist ? `<span class="kill-assist">(+${esc(String(k.assist))})</span>` : '';
+        return `<div class="kill-event" data-time="${t}">
+          <span class="kill-time">${formatTime(t)}</span>
+          <span class="kill-killer">${esc(String(k.killer))}</span>
+          <span class="kill-sep">⚔</span>
+          <span class="kill-victim">${esc(String(k.victim))}</span>
+          ${assistStr}
+        </div>`;
+      }).join('');
+
+      const killSection = document.createElement('div');
+      killSection.className = 'kill-timeline';
+      killSection.innerHTML = `<h4>&#x2694;&#xFE0F; Kill Timeline (${kills.length})</h4>${killHtml}`;
+      container.appendChild(killSection);
+
+      // Seek on kill event click
+      killSection.querySelectorAll('.kill-event[data-time]').forEach((row) => {
+        row.addEventListener('click', () => {
+          const time = parseFloat(row.getAttribute('data-time'));
+          if (!isNaN(time)) {
+            videoPlayer.currentTime = time;
+            videoPlayer.play();
+            videoAnnotationSection.scrollIntoView({ behavior: 'smooth' });
+          }
+        });
+      });
+    }
+
     // Show results
     async function showResults(id) {
       currentResultsId = id;
@@ -831,6 +863,12 @@
           exportAllBtn.disabled = true;
           resultsContent.innerHTML =
             '<div class="no-highlights">No highlights detected</div>';
+
+          // Still render kill timeline even when there are no highlights
+          const killsNoHighlight = Array.isArray(data.kills) ? data.kills : [];
+          if (killsNoHighlight.length > 0) {
+            renderKillTimeline(killsNoHighlight, resultsContent);
+          }
           return;
         }
 
@@ -878,34 +916,7 @@
         // Render kill timeline if kills are available
         const kills = Array.isArray(data.kills) ? data.kills : [];
         if (kills.length > 0) {
-          const killHtml = kills.map((k) => {
-            const t = Number.isFinite(Number(k.time)) ? Number(k.time) : 0;
-            const assistStr = k.assist ? `<span class="kill-assist">(+${esc(String(k.assist))})</span>` : '';
-            return `<div class="kill-event" data-time="${t}">
-              <span class="kill-time">${formatTime(t)}</span>
-              <span class="kill-killer">${esc(String(k.killer))}</span>
-              <span class="kill-sep">⚔</span>
-              <span class="kill-victim">${esc(String(k.victim))}</span>
-              ${assistStr}
-            </div>`;
-          }).join('');
-
-          const killSection = document.createElement('div');
-          killSection.className = 'kill-timeline';
-          killSection.innerHTML = `<h4>&#x2694;&#xFE0F; Kill Timeline (${kills.length})</h4>${killHtml}`;
-          resultsContent.appendChild(killSection);
-
-          // Seek on kill event click
-          killSection.querySelectorAll('.kill-event[data-time]').forEach((row) => {
-            row.addEventListener('click', () => {
-              const time = parseFloat(row.getAttribute('data-time'));
-              if (!isNaN(time)) {
-                videoPlayer.currentTime = time;
-                videoPlayer.play();
-                videoAnnotationSection.scrollIntoView({ behavior: 'smooth' });
-              }
-            });
-          });
+          renderKillTimeline(kills, resultsContent);
         }
       } catch {
         resultsContent.innerHTML =

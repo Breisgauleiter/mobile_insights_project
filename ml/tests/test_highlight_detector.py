@@ -272,3 +272,103 @@ class TestMultiSignalIntegration:
         )
         assert len(results) >= 1
         assert all("frame_diff" in h.get("sources", []) for h in results)
+
+    def test_killfeed_events_appear_in_highlights(self, activity_video, monkeypatch):
+        """Mock detect_killfeed and verify kill events appear in the highlight output."""
+
+        def mock_killfeed(video_path, **kwargs):
+            return [
+                {"time": 0.5, "killer": "Layla", "victim": "Tigreal"},
+            ]
+
+        monkeypatch.setattr(highlight_detector, "detect_killfeed", mock_killfeed)
+
+        results = highlight_detector.detect_highlights(
+            activity_video, threshold=10.0,
+            enable_audio=False, enable_color=False, enable_killfeed=True,
+        )
+        kill_events = [h for h in results if h.get("type") == "kill"]
+        assert len(kill_events) >= 1
+        assert kill_events[0]["sources"] == ["killfeed"]
+
+    def test_kills_out_populated_from_killfeed(self, activity_video, monkeypatch):
+        """kills_out list is populated with raw kill events from detect_killfeed."""
+
+        def mock_killfeed(video_path, **kwargs):
+            return [
+                {"time": 1.0, "killer": "Gusion", "victim": "Hanabi"},
+                {"time": 2.0, "killer": "Alucard", "victim": "Franco"},
+            ]
+
+        monkeypatch.setattr(highlight_detector, "detect_killfeed", mock_killfeed)
+
+        kills_out: list[dict] = []
+        highlight_detector.detect_highlights(
+            activity_video, threshold=10.0,
+            enable_audio=False, enable_color=False, enable_killfeed=True,
+            kills_out=kills_out,
+        )
+        assert len(kills_out) == 2
+        assert kills_out[0]["killer"] == "Gusion"
+        assert kills_out[1]["killer"] == "Alucard"
+
+    def test_kills_out_not_populated_when_killfeed_disabled(self, activity_video, monkeypatch):
+        """kills_out must remain empty when enable_killfeed=False."""
+
+        def mock_killfeed(video_path, **kwargs):
+            return [{"time": 1.0, "killer": "Hero", "victim": "Victim"}]
+
+        monkeypatch.setattr(highlight_detector, "detect_killfeed", mock_killfeed)
+
+        kills_out: list[dict] = []
+        highlight_detector.detect_highlights(
+            activity_video, threshold=10.0,
+            enable_audio=False, enable_color=False, enable_killfeed=False,
+            kills_out=kills_out,
+        )
+        assert kills_out == []
+
+    def test_killfeed_failure_does_not_break_pipeline(self, activity_video, monkeypatch):
+        """If detect_killfeed raises ImportError, pipeline still returns results."""
+
+        def mock_killfeed_fail(video_path, **kwargs):
+            raise ImportError("pytesseract not installed")
+
+        monkeypatch.setattr(highlight_detector, "detect_killfeed", mock_killfeed_fail)
+
+        results = highlight_detector.detect_highlights(
+            activity_video, threshold=10.0,
+            enable_audio=False, enable_color=False, enable_killfeed=True,
+        )
+        assert isinstance(results, list)
+
+    def test_cli_json_includes_kills_array(self, activity_video, tmp_path, monkeypatch):
+        """The CLI JSON output includes a 'kills' array."""
+        import json as _json
+
+        def mock_killfeed(video_path, **kwargs):
+            return [{"time": 0.5, "killer": "Layla", "victim": "Tigreal"}]
+
+        monkeypatch.setattr(highlight_detector, "detect_killfeed", mock_killfeed)
+
+        output_path = str(tmp_path / "results.json")
+        old_argv = sys.argv
+        sys.argv = [
+            "highlight_detector.py",
+            "--video", activity_video,
+            "--format", "json",
+            "--output", output_path,
+            "--no-audio",
+            "--no-color",
+        ]
+        try:
+            highlight_detector.main()
+        finally:
+            sys.argv = old_argv
+
+        with open(output_path) as f:
+            data = _json.load(f)
+        assert "kills" in data
+        assert isinstance(data["kills"], list)
+        assert len(data["kills"]) >= 1
+        assert data["kills"][0]["killer"] == "Layla"
