@@ -724,15 +724,20 @@
         <!-- Step 1: Region selection -->
         <div id="minimapSelectStep">
           <p style="font-size:13px; color:#a0a0c0; margin:0 0 8px; text-align:center;">
-            Markiere die Minimap-Region im Video (Rechteck ziehen), dann klicke &quot;Analyse starten&quot;.
+            1. Navigiere zum Spielstart &mdash; 2. Markiere die Minimap (Rechteck ziehen) &mdash; 3. Analyse starten
           </p>
           <div id="regionSelectWrap" style="position:relative; width:100%; max-width:640px; margin:0 auto 10px; background:#0f0f23; border-radius:8px; border:1px solid #2a2a4a; overflow:hidden; cursor:crosshair;">
             <canvas id="regionSelectCanvas" style="display:block; width:100%; height:auto;"></canvas>
           </div>
-          <div style="display:flex; justify-content:center; gap:8px; margin-bottom:12px;">
+          <div style="display:flex; align-items:center; gap:8px; max-width:640px; margin:0 auto 10px;">
+            <span style="font-size:11px; color:#a0a0c0; white-space:nowrap;">Frame:</span>
+            <input type="range" id="regionTimeScrubber" min="0" max="100" value="0" style="flex:1; accent-color:#6c5ce7;">
+            <span id="regionTimeLabel" style="font-size:12px; color:#a0a0c0; min-width:44px; text-align:right;">0:00</span>
+          </div>
+          <div style="display:flex; justify-content:center; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
             <button id="regionResetBtn" class="control-btn" style="font-size:12px; padding:6px 14px;">Auswahl zurücksetzen</button>
             <button id="regionAutoBtn" class="control-btn" style="font-size:12px; padding:6px 14px;">Auto (oben links)</button>
-            <button id="regionStartBtn" class="control-btn" style="font-size:12px; padding:6px 14px; background:#6c5ce7; color:#fff; font-weight:600;">Analyse starten</button>
+            <button id="regionStartBtn" class="control-btn" style="font-size:12px; padding:6px 14px; background:#6c5ce7; color:#fff; font-weight:600;">Analyse starten (ab aktuellem Frame)</button>
           </div>
         </div>
         <!-- Step 2: Analysis results -->
@@ -826,9 +831,12 @@
     const regionAutoBtn = document.getElementById('regionAutoBtn');
     const regionStartBtn = document.getElementById('regionStartBtn');
     const regionChangeBtn = document.getElementById('regionChangeBtn');
+    const regionTimeScrubber = document.getElementById('regionTimeScrubber');
+    const regionTimeLabel = document.getElementById('regionTimeLabel');
     let regionFrameImage = null;  // captured video frame as Image
     let regionSelection = null;   // {x, y, w, h} in video pixel coords
     let regionDragStart = null;   // mouse-down position while drawing
+    let regionStartTime = 0;      // game start time in seconds
 
     // Tab switching — click handler + aria-selected state management
     document.querySelectorAll('.result-tab').forEach((tab) => {
@@ -1318,33 +1326,41 @@
       minimapSelectStep.style.display = '';
       minimapResultStep.style.display = 'none';
       regionSelection = null;
-      captureVideoFrame();
+      initRegionScrubber();
     }
 
-    function captureVideoFrame() {
-      if (!videoPlayer.videoWidth) {
-        // Video not loaded yet — wait for metadata
+    function initRegionScrubber() {
+      if (!videoPlayer.videoWidth || !videoPlayer.duration) {
         videoPlayer.addEventListener('loadeddata', function onLoaded() {
           videoPlayer.removeEventListener('loadeddata', onLoaded);
-          captureVideoFrame();
+          initRegionScrubber();
         });
         return;
       }
+      const dur = videoPlayer.duration;
+      regionTimeScrubber.min = 0;
+      regionTimeScrubber.max = Math.floor(dur);
+      // Default to ~30s or half the video, whichever is smaller
+      const defaultTime = Math.min(30, Math.floor(dur / 2));
+      regionTimeScrubber.value = defaultTime;
+      regionStartTime = defaultTime;
+      seekAndCapture(defaultTime);
+    }
+
+    function seekAndCapture(timeSec) {
+      regionStartTime = timeSec;
+      regionTimeLabel.textContent = formatTime(timeSec);
       const vw = videoPlayer.videoWidth;
       const vh = videoPlayer.videoHeight;
       regionSelectCanvas.width = vw;
       regionSelectCanvas.height = vh;
-      // Seek to ~10s to skip loading screen
-      const seekTime = Math.min(10, videoPlayer.duration || 10);
-      const wasPaused = videoPlayer.paused;
-      videoPlayer.currentTime = seekTime;
+      videoPlayer.currentTime = timeSec;
       videoPlayer.addEventListener('seeked', function onSeeked() {
         videoPlayer.removeEventListener('seeked', onSeeked);
         regionSelectCtx.drawImage(videoPlayer, 0, 0, vw, vh);
         regionFrameImage = regionSelectCtx.getImageData(0, 0, vw, vh);
         drawRegionOverlay();
-        if (wasPaused) videoPlayer.pause();
-      });
+      }, { once: true });
     }
 
     function drawRegionOverlay() {
@@ -1408,11 +1424,20 @@
       drawRegionOverlay();
     });
 
+    regionTimeScrubber.addEventListener('input', () => {
+      const t = parseInt(regionTimeScrubber.value, 10);
+      regionTimeLabel.textContent = formatTime(t);
+    });
+    regionTimeScrubber.addEventListener('change', () => {
+      const t = parseInt(regionTimeScrubber.value, 10);
+      seekAndCapture(t);
+    });
+
     regionStartBtn.addEventListener('click', () => {
       if (!currentResultsId) return;
       minimapSelectStep.style.display = 'none';
       minimapResultStep.style.display = '';
-      loadMinimap(currentResultsId, regionSelection || null);
+      loadMinimap(currentResultsId, regionSelection || null, regionStartTime);
     });
 
     regionChangeBtn.addEventListener('click', () => {
@@ -1425,7 +1450,7 @@
     // MINIMAP VISUALIZATION
     // =====================
 
-    async function loadMinimap(id, region) {
+    async function loadMinimap(id, region, startTime) {
       if (!id) return;
       minimapEventsList.innerHTML = '<li class="minimap-status">Analyzing minimap...</li>';
       minimapCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
@@ -1446,6 +1471,9 @@
             width: region.w,
             height: region.h,
           };
+        }
+        if (typeof startTime === 'number' && startTime > 0) {
+          body.start_time = startTime;
         }
         const res = await fetch('/minimap-analysis', {
           method: 'POST',

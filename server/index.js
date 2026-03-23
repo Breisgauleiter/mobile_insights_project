@@ -528,7 +528,7 @@ app.post('/reprocess/:filename', (req, res) => {
  * Response: { timeline, events, minimap_region }
  */
 app.post('/minimap-analysis', minimapRateLimit, (req, res) => {
-  const { filename, minimap_region } = req.body || {};
+  const { filename, minimap_region, start_time } = req.body || {};
   if (!filename || typeof filename !== 'string') {
     return res.status(400).json({ error: 'filename is required' });
   }
@@ -542,14 +542,16 @@ app.post('/minimap-analysis', minimapRateLimit, (req, res) => {
 
   const cacheFile = path.join(uploadDir, safeFilename + '.minimap.json');
 
-  // Only use cache when no custom region was provided
+  // Only use cache when no custom region or start_time was provided
   const hasCustomRegion = minimap_region
     && typeof minimap_region.x === 'number'
     && typeof minimap_region.y === 'number'
     && typeof minimap_region.width === 'number'
     && typeof minimap_region.height === 'number';
 
-  if (!hasCustomRegion && fs.existsSync(cacheFile)) {
+  const hasStartTime = typeof start_time === 'number' && start_time > 0;
+
+  if (!hasCustomRegion && !hasStartTime && fs.existsSync(cacheFile)) {
     try {
       const raw = fs.readFileSync(cacheFile, 'utf-8');
       return res.json(JSON.parse(raw));
@@ -566,6 +568,9 @@ app.post('/minimap-analysis', minimapRateLimit, (req, res) => {
       '--minimap-width', String(Math.round(minimap_region.width)),
       '--minimap-height', String(Math.round(minimap_region.height)),
     );
+  }
+  if (hasStartTime) {
+    args.push('--start-time', String(Math.round(start_time)));
   }
 
   const child = spawn(PYTHON_BIN, args, { stdio: 'pipe' });

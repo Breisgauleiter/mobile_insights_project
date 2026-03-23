@@ -312,6 +312,7 @@ def track_minimap(
     sample_fps: float = 3.0,
     min_dot_area: int = _MIN_DOT_AREA,
     max_dot_area: int = _MAX_DOT_AREA,
+    start_time: float = 0.0,
 ) -> dict:
     """Detect and track hero positions on the MLBB minimap.
 
@@ -329,6 +330,8 @@ def track_minimap(
         sample_fps: Frames per second to sample (recommended 2–5).
         min_dot_area: Minimum contour area in pixels to treat as a hero dot.
         max_dot_area: Maximum contour area in pixels to treat as a hero dot.
+        start_time: Skip video before this timestamp (seconds).  Useful to
+            skip menu / loading screens before the actual game begins.
 
     Returns:
         Dict with:
@@ -373,8 +376,14 @@ def track_minimap(
     # Number of raw frames to skip between analyzed frames
     frame_step = max(1, round(fps / max(_MIN_SAMPLE_FPS, sample_fps)))
 
+    # Seek past menu / loading screen if start_time is given
+    start_frame = 0
+    if start_time > 0:
+        start_frame = int(start_time * fps)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
     timeline: list[dict] = []
-    frame_idx = 0
+    frame_idx = start_frame
 
     # Hero tracking state (persistent IDs across frames)
     ally_active: dict[int, tuple[float, float]] = {}
@@ -402,8 +411,8 @@ def track_minimap(
                 frame_idx += 1
                 continue
 
-            # Capture background image from a frame ~10s in (skip loading screen)
-            if minimap_bg_b64 is None and frame_idx > fps * 10:
+            # Capture background image from the first analyzed frame
+            if minimap_bg_b64 is None:
                 resized = cv2.resize(minimap, (200, 200), interpolation=cv2.INTER_AREA)
                 _, png_buf = cv2.imencode('.png', resized)
                 minimap_bg_b64 = base64.b64encode(png_buf.tobytes()).decode('ascii')
@@ -489,6 +498,10 @@ def main() -> None:
         "--max-dot-area", type=int, default=_MAX_DOT_AREA,
         help=f"Maximum dot contour area in pixels (default: {_MAX_DOT_AREA})",
     )
+    parser.add_argument(
+        "--start-time", type=float, default=0.0,
+        help="Skip video before this time in seconds (default: 0)",
+    )
     args = parser.parse_args()
 
     config: dict | None = None
@@ -510,6 +523,7 @@ def main() -> None:
             sample_fps=args.sample_fps,
             min_dot_area=args.min_dot_area,
             max_dot_area=args.max_dot_area,
+            start_time=args.start_time,
         )
     except (FileNotFoundError, RuntimeError) as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
