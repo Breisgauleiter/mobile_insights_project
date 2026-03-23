@@ -721,26 +721,46 @@
       <div id="resultsContent"></div>
       <!-- Minimap tab content -->
       <div id="minimapContent" style="display:none">
-        <div class="minimap-canvas-wrap">
-          <canvas id="minimapCanvas" width="200" height="200"></canvas>
+        <!-- Step 1: Region selection -->
+        <div id="minimapSelectStep">
+          <p style="font-size:13px; color:#a0a0c0; margin:0 0 8px; text-align:center;">
+            Markiere die Minimap-Region im Video (Rechteck ziehen), dann klicke &quot;Analyse starten&quot;.
+          </p>
+          <div id="regionSelectWrap" style="position:relative; width:100%; max-width:640px; margin:0 auto 10px; background:#0f0f23; border-radius:8px; border:1px solid #2a2a4a; overflow:hidden; cursor:crosshair;">
+            <canvas id="regionSelectCanvas" style="display:block; width:100%; height:auto;"></canvas>
+          </div>
+          <div style="display:flex; justify-content:center; gap:8px; margin-bottom:12px;">
+            <button id="regionResetBtn" class="control-btn" style="font-size:12px; padding:6px 14px;">Auswahl zurücksetzen</button>
+            <button id="regionAutoBtn" class="control-btn" style="font-size:12px; padding:6px 14px;">Auto (oben links)</button>
+            <button id="regionStartBtn" class="control-btn" style="font-size:12px; padding:6px 14px; background:#6c5ce7; color:#fff; font-weight:600;">Analyse starten</button>
+          </div>
         </div>
-        <div class="minimap-legend">
-          <span><span class="dot ally"></span> Ally</span>
-          <span><span class="dot enemy"></span> Enemy</span>
+        <!-- Step 2: Analysis results -->
+        <div id="minimapResultStep" style="display:none;">
+          <div style="display:flex; justify-content:center; margin-bottom:8px;">
+            <button id="regionChangeBtn" class="control-btn" style="font-size:11px; padding:4px 10px;">Region ändern</button>
+          </div>
+          <div class="minimap-canvas-wrap">
+            <canvas id="minimapCanvas" width="200" height="200"></canvas>
+          </div>
+          <div class="minimap-legend">
+            <span><span class="dot ally"></span> Ally</span>
+            <span><span class="dot enemy"></span> Enemy</span>
+          </div>
+          <!-- Hero filter -->
+          <div id="heroFilterWrap" style="display:none; padding: 6px 10px; background: #1a1a30; border-radius: 6px; margin: 6px 0; flex-wrap: wrap; gap: 4px;">
+            <label style="font-size:11px; color:#a0a0c0; margin-right:6px; display:flex; align-items:center; gap:3px;">
+              <input type="checkbox" id="heatmapToggle"> Heatmap
+            </label>
+            <span id="heroFilterButtons" style="display:inline-flex; flex-wrap:wrap; gap:3px;"></span>
+          </div>
+          <div class="minimap-scrubber">
+            <span style="font-size:12px;color:#a0a0c0">0:00</span>
+            <input type="range" id="minimapScrubber" min="0" max="100" value="0" style="flex:1">
+            <span class="time-label" id="minimapTimeLabel">0:00</span>
+          </div>
+          <ul class="minimap-events" id="minimapEventsList"></ul>
         </div>
-        <!-- Hero filter -->
-        <div id="heroFilterWrap" style="display:none; padding: 6px 10px; background: #1a1a30; border-radius: 6px; margin: 6px 0; flex-wrap: wrap; gap: 4px;">
-          <label style="font-size:11px; color:#a0a0c0; margin-right:6px; display:flex; align-items:center; gap:3px;">
-            <input type="checkbox" id="heatmapToggle"> Heatmap
-          </label>
-          <span id="heroFilterButtons" style="display:inline-flex; flex-wrap:wrap; gap:3px;"></span>
-        </div>
-        <div class="minimap-scrubber">
-          <span style="font-size:12px;color:#a0a0c0">0:00</span>
-          <input type="range" id="minimapScrubber" min="0" max="100" value="0" style="flex:1">
-          <span class="time-label" id="minimapTimeLabel">0:00</span>
-        </div>
-        <ul class="minimap-events" id="minimapEventsList"></ul>
       </div>
     </div>
 
@@ -797,6 +817,19 @@
 
     let minimapBgImage = null;  // Image element for minimap background
 
+    // Region selection state
+    const regionSelectCanvas = document.getElementById('regionSelectCanvas');
+    const regionSelectCtx = regionSelectCanvas.getContext('2d');
+    const minimapSelectStep = document.getElementById('minimapSelectStep');
+    const minimapResultStep = document.getElementById('minimapResultStep');
+    const regionResetBtn = document.getElementById('regionResetBtn');
+    const regionAutoBtn = document.getElementById('regionAutoBtn');
+    const regionStartBtn = document.getElementById('regionStartBtn');
+    const regionChangeBtn = document.getElementById('regionChangeBtn');
+    let regionFrameImage = null;  // captured video frame as Image
+    let regionSelection = null;   // {x, y, w, h} in video pixel coords
+    let regionDragStart = null;   // mouse-down position while drawing
+
     // Tab switching — click handler + aria-selected state management
     document.querySelectorAll('.result-tab').forEach((tab) => {
       tab.addEventListener('click', () => {
@@ -813,9 +846,9 @@
         } else {
           resultsContent.style.display = 'none';
           minimapContent.style.display = '';
-          // Only fetch if minimap data hasn't been loaded yet for this video
+          // Show region selection step or results depending on state
           if (currentResultsId && minimapTimeline.length === 0) {
-            loadMinimap(currentResultsId);
+            showRegionSelectStep();
           }
         }
       });
@@ -1278,10 +1311,121 @@
     }
 
     // =====================
+    // MINIMAP REGION SELECT
+    // =====================
+
+    function showRegionSelectStep() {
+      minimapSelectStep.style.display = '';
+      minimapResultStep.style.display = 'none';
+      regionSelection = null;
+      captureVideoFrame();
+    }
+
+    function captureVideoFrame() {
+      if (!videoPlayer.videoWidth) {
+        // Video not loaded yet — wait for metadata
+        videoPlayer.addEventListener('loadeddata', function onLoaded() {
+          videoPlayer.removeEventListener('loadeddata', onLoaded);
+          captureVideoFrame();
+        });
+        return;
+      }
+      const vw = videoPlayer.videoWidth;
+      const vh = videoPlayer.videoHeight;
+      regionSelectCanvas.width = vw;
+      regionSelectCanvas.height = vh;
+      // Seek to ~10s to skip loading screen
+      const seekTime = Math.min(10, videoPlayer.duration || 10);
+      const wasPaused = videoPlayer.paused;
+      videoPlayer.currentTime = seekTime;
+      videoPlayer.addEventListener('seeked', function onSeeked() {
+        videoPlayer.removeEventListener('seeked', onSeeked);
+        regionSelectCtx.drawImage(videoPlayer, 0, 0, vw, vh);
+        regionFrameImage = regionSelectCtx.getImageData(0, 0, vw, vh);
+        drawRegionOverlay();
+        if (wasPaused) videoPlayer.pause();
+      });
+    }
+
+    function drawRegionOverlay() {
+      if (!regionFrameImage) return;
+      regionSelectCtx.putImageData(regionFrameImage, 0, 0);
+      if (regionSelection) {
+        const s = regionSelection;
+        // Dim everything outside selection
+        regionSelectCtx.fillStyle = 'rgba(0,0,0,0.5)';
+        regionSelectCtx.fillRect(0, 0, regionSelectCanvas.width, regionSelectCanvas.height);
+        // Draw selected region (clear the dim)
+        regionSelectCtx.putImageData(regionFrameImage,
+          0, 0,
+          s.x, s.y, s.w, s.h);
+        // Red border
+        regionSelectCtx.strokeStyle = '#ff3333';
+        regionSelectCtx.lineWidth = 2;
+        regionSelectCtx.strokeRect(s.x, s.y, s.w, s.h);
+      }
+    }
+
+    function canvasPosToVideo(e) {
+      const rect = regionSelectCanvas.getBoundingClientRect();
+      const scaleX = regionSelectCanvas.width / rect.width;
+      const scaleY = regionSelectCanvas.height / rect.height;
+      return {
+        x: Math.round((e.clientX - rect.left) * scaleX),
+        y: Math.round((e.clientY - rect.top) * scaleY),
+      };
+    }
+
+    regionSelectCanvas.addEventListener('mousedown', (e) => {
+      regionDragStart = canvasPosToVideo(e);
+      regionSelection = null;
+    });
+
+    regionSelectCanvas.addEventListener('mousemove', (e) => {
+      if (!regionDragStart) return;
+      const pos = canvasPosToVideo(e);
+      const x = Math.min(regionDragStart.x, pos.x);
+      const y = Math.min(regionDragStart.y, pos.y);
+      const w = Math.abs(pos.x - regionDragStart.x);
+      const h = Math.abs(pos.y - regionDragStart.y);
+      regionSelection = { x, y, w, h };
+      drawRegionOverlay();
+    });
+
+    regionSelectCanvas.addEventListener('mouseup', () => {
+      regionDragStart = null;
+    });
+
+    regionResetBtn.addEventListener('click', () => {
+      regionSelection = null;
+      drawRegionOverlay();
+    });
+
+    regionAutoBtn.addEventListener('click', () => {
+      if (!regionSelectCanvas.width) return;
+      const size = Math.round(Math.min(regionSelectCanvas.width, regionSelectCanvas.height) * 0.30);
+      regionSelection = { x: 0, y: 0, w: size, h: size };
+      drawRegionOverlay();
+    });
+
+    regionStartBtn.addEventListener('click', () => {
+      if (!currentResultsId) return;
+      minimapSelectStep.style.display = 'none';
+      minimapResultStep.style.display = '';
+      loadMinimap(currentResultsId, regionSelection || null);
+    });
+
+    regionChangeBtn.addEventListener('click', () => {
+      minimapTimeline = [];
+      minimapEvents = [];
+      showRegionSelectStep();
+    });
+
+    // =====================
     // MINIMAP VISUALIZATION
     // =====================
 
-    async function loadMinimap(id) {
+    async function loadMinimap(id, region) {
       if (!id) return;
       minimapEventsList.innerHTML = '<li class="minimap-status">Analyzing minimap...</li>';
       minimapCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
@@ -1294,10 +1438,19 @@
       minimapBgImage = null;
 
       try {
+        const body = { filename: id };
+        if (region && region.w > 10 && region.h > 10) {
+          body.minimap_region = {
+            x: region.x,
+            y: region.y,
+            width: region.w,
+            height: region.h,
+          };
+        }
         const res = await fetch('/minimap-analysis', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: id }),
+          body: JSON.stringify(body),
         });
 
         if (!res.ok) {

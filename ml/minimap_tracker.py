@@ -19,7 +19,7 @@ import numpy as np
 
 # Default minimap size as a fraction of the shorter frame dimension.
 # MLBB minimap occupies roughly 28-30% of the shorter dimension in the
-# bottom-left corner.  At 720p (min=720) this yields ~216 px which covers
+# top-left corner.  At 720p (min=720) this yields ~216 px which covers
 # the ~200 px minimap plus a small margin.
 _DEFAULT_MINIMAP_FRACTION = 0.30
 
@@ -73,7 +73,7 @@ def _get_minimap_region(
         frame_width: Frame width in pixels.
         frame_height: Frame height in pixels.
         config: Optional dict with integer keys 'x', 'y', 'width', 'height'.
-                If None, the minimap is estimated from the bottom-left corner
+                If None, the minimap is estimated from the top-left corner
                 using the default fraction of the shorter frame dimension.
 
     Returns:
@@ -87,12 +87,12 @@ def _get_minimap_region(
         h = config.get("height")
         return (
             int(x) if x is not None else 0,
-            int(y) if y is not None else frame_height - size,
+            int(y) if y is not None else 0,
             int(w) if w is not None else size,
             int(h) if h is not None else size,
         )
     size = int(min(frame_width, frame_height) * _DEFAULT_MINIMAP_FRACTION)
-    return 0, frame_height - size, size, size
+    return 0, 0, size, size
 
 
 def _find_dots(
@@ -316,7 +316,7 @@ def track_minimap(
     """Detect and track hero positions on the MLBB minimap.
 
     Samples the video at *sample_fps* frames per second, crops the minimap
-    region from the bottom-left corner, and applies HSV color filtering to
+    region from the top-left corner, and applies HSV color filtering to
     locate ally (blue) and enemy (red) hero indicator dots via contour
     detection.  Positions are normalized to [0, 1] relative to the minimap
     crop so that (0, 0) is the top-left of the minimap.

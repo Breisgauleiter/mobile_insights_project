@@ -521,14 +521,14 @@ app.post('/reprocess/:filename', (req, res) => {
 
 /**
  * Run the minimap tracker Python script for a video and return the results.
- * Results are cached as <filename>.minimap.json in the uploads directory.
+ * When a custom minimap_region is provided the cache is bypassed (fresh run).
  *
  * POST /minimap-analysis
- * Body: { filename: string }
+ * Body: { filename: string, minimap_region?: { x, y, width, height } }
  * Response: { timeline, events, minimap_region }
  */
 app.post('/minimap-analysis', minimapRateLimit, (req, res) => {
-  const { filename } = req.body || {};
+  const { filename, minimap_region } = req.body || {};
   if (!filename || typeof filename !== 'string') {
     return res.status(400).json({ error: 'filename is required' });
   }
@@ -542,8 +542,14 @@ app.post('/minimap-analysis', minimapRateLimit, (req, res) => {
 
   const cacheFile = path.join(uploadDir, safeFilename + '.minimap.json');
 
-  // Return cached result if available
-  if (fs.existsSync(cacheFile)) {
+  // Only use cache when no custom region was provided
+  const hasCustomRegion = minimap_region
+    && typeof minimap_region.x === 'number'
+    && typeof minimap_region.y === 'number'
+    && typeof minimap_region.width === 'number'
+    && typeof minimap_region.height === 'number';
+
+  if (!hasCustomRegion && fs.existsSync(cacheFile)) {
     try {
       const raw = fs.readFileSync(cacheFile, 'utf-8');
       return res.json(JSON.parse(raw));
@@ -552,7 +558,17 @@ app.post('/minimap-analysis', minimapRateLimit, (req, res) => {
     }
   }
 
-  const child = spawn(PYTHON_BIN, [MINIMAP_SCRIPT, '--video', videoPath], { stdio: 'pipe' });
+  const args = [MINIMAP_SCRIPT, '--video', videoPath];
+  if (hasCustomRegion) {
+    args.push(
+      '--minimap-x', String(Math.round(minimap_region.x)),
+      '--minimap-y', String(Math.round(minimap_region.y)),
+      '--minimap-width', String(Math.round(minimap_region.width)),
+      '--minimap-height', String(Math.round(minimap_region.height)),
+    );
+  }
+
+  const child = spawn(PYTHON_BIN, args, { stdio: 'pipe' });
   let stdout = '';
   let stderr = '';
 
