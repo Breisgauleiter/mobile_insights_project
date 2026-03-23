@@ -18,8 +18,10 @@ import cv2
 import numpy as np
 
 # Default minimap size as a fraction of the shorter frame dimension.
-# MLBB minimap occupies roughly 18% of the screen in the bottom-left corner.
-_DEFAULT_MINIMAP_FRACTION = 0.18
+# MLBB minimap occupies roughly 28-30% of the shorter dimension in the
+# bottom-left corner.  At 720p (min=720) this yields ~216 px which covers
+# the ~200 px minimap plus a small margin.
+_DEFAULT_MINIMAP_FRACTION = 0.30
 
 # HSV color ranges for hero indicator dots
 _ALLY_HSV_LOWER = np.array([95, 100, 100])    # Blue (ally)
