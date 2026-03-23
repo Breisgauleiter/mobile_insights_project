@@ -795,6 +795,8 @@
     const ALLY_COLORS = ['#4488ff','#22ccff','#66ddaa','#aabb44','#cc88ff'];
     const ENEMY_COLORS = ['#ff4444','#ff8844','#ff44aa','#ffcc44','#ff6688'];
 
+    let minimapBgImage = null;  // Image element for minimap background
+
     // Tab switching — click handler + aria-selected state management
     document.querySelectorAll('.result-tab').forEach((tab) => {
       tab.addEventListener('click', () => {
@@ -1234,6 +1236,7 @@
       heatmapToggle.checked = false;
       heroFilterWrap.style.display = 'none';
       heroFilterButtons.innerHTML = '';
+      minimapBgImage = null;
       disableAnnotationMode();
     });
 
@@ -1288,6 +1291,7 @@
       heatmapMode = false;
       heatmapToggle.checked = false;
       minimapHeroes = { ally: [], enemy: [] };
+      minimapBgImage = null;
 
       try {
         const res = await fetch('/minimap-analysis', {
@@ -1307,6 +1311,16 @@
         minimapTimeline = Array.isArray(data.timeline) ? data.timeline : [];
         minimapEvents = Array.isArray(data.events) ? data.events : [];
         minimapHeroes = data.heroes || { ally: [], enemy: [] };
+
+        // Load minimap background image if available
+        if (data.minimap_bg) {
+          const img = new Image();
+          img.onload = () => {
+            minimapBgImage = img;
+            drawMinimapFrame(minimapFrameIndex);
+          };
+          img.src = 'data:image/png;base64,' + data.minimap_bg;
+        }
 
         if (minimapTimeline.length === 0) {
           minimapCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
@@ -1383,6 +1397,13 @@
       const W = minimapCanvas.width;
       const H = minimapCanvas.height;
       minimapCtx.clearRect(0, 0, W, H);
+
+      // Draw minimap background image (captured from actual video)
+      if (minimapBgImage) {
+        minimapCtx.globalAlpha = 0.5;
+        minimapCtx.drawImage(minimapBgImage, 0, 0, W, H);
+        minimapCtx.globalAlpha = 1;
+      }
 
       // Draw grid
       minimapCtx.strokeStyle = 'rgba(255,255,255,0.06)';

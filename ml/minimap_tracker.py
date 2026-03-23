@@ -8,6 +8,7 @@ Ally dots (blue) and enemy dots (red) are detected separately and their
 positions are reported normalized to the minimap coordinate space.
 """
 import argparse
+import base64
 import json
 import math
 import os
@@ -41,7 +42,10 @@ _MAX_DOT_AREA = _MAX_HERO_AREA
 _MAX_HEROES_PER_TEAM = 5
 
 # Maximum normalized distance to match a dot to its previous-frame hero
-_MATCH_DISTANCE_THRESHOLD = 0.15
+_MATCH_DISTANCE_THRESHOLD = 0.25
+
+# Wider threshold for recovering heroes lost to fog-of-war / death
+_LOST_MATCH_THRESHOLD = 0.5
 
 # Gank detection: enemy dot appears in ally territory (bottom-left quadrant).
 # Normalized minimap coords: (0,0) = top-left, (1,1) = bottom-right.
@@ -144,61 +148,92 @@ def _find_dots(
 
 def _assign_hero_ids(
     current_dots: list[tuple[float, float, float]],
-    prev_positions: dict[int, tuple[float, float]],
-    next_id_counter: int,
-) -> tuple[list[tuple[float, float, int]], dict[int, tuple[float, float]], int]:
-    """Match current-frame dots to previous-frame hero IDs via nearest-neighbor.
+    active: dict[int, tuple[float, float]],
+    lost: dict[int, tuple[float, float]],
+    next_id: int,
+) -> tuple[list[tuple[float, float, int]], dict[int, tuple[float, float]], dict[int, tuple[float, float]], int]:
+    """Match current-frame dots to persistent hero IDs (max 5 per team).
 
-    Args:
-        current_dots: Detected (x, y, area) tuples for one team this frame.
-        prev_positions: Mapping hero_id → (x, y) from the previous frame.
-        next_id_counter: Next unused hero_id integer for this team.
+    Three-pass strategy:
+    1. Match to active heroes from previous frame (tight threshold).
+    2. Match remaining dots to lost heroes (wider threshold) — heroes
+       that disappeared temporarily due to fog-of-war or death.
+    3. Create new IDs only if total known heroes < 5.
+       Otherwise force-assign to the closest known hero.
 
-    Returns:
-        Tuple of:
-        - matched dots: [(x, y, hero_id), ...]
-        - updated positions dict for next frame
-        - updated next_id_counter
+    Returns (assigned, new_active, new_lost, next_id).
     """
     if not current_dots:
-        return [], {}, next_id_counter
+        new_lost = dict(lost)
+        for hid, pos in active.items():
+            new_lost[hid] = pos
+        return [], {}, new_lost, next_id
 
-    # Build cost matrix and assign greedily (simple, fast, sufficient for 5 heroes)
-    used_prev_ids: set[int] = set()
+    used_ids: set[int] = set()
     assigned: list[tuple[float, float, int]] = []
-
     dots_xy = [(d[0], d[1]) for d in current_dots]
-    remaining_dots = list(range(len(dots_xy)))
+    remaining = set(range(len(dots_xy)))
 
-    # First pass: match to known heroes from previous frame
-    if prev_positions:
-        # For each dot, find closest previous hero
-        matches: list[tuple[float, int, int]] = []  # (dist, dot_idx, hero_id)
-        for di, (dx, dy) in enumerate(dots_xy):
-            for hid, (px, py) in prev_positions.items():
+    def greedy_match(
+        candidates: dict[int, tuple[float, float]],
+        threshold: float,
+    ) -> None:
+        matches: list[tuple[float, int, int]] = []
+        for di in remaining:
+            dx, dy = dots_xy[di]
+            for hid, (px, py) in candidates.items():
+                if hid in used_ids:
+                    continue
                 dist = math.sqrt((dx - px) ** 2 + (dy - py) ** 2)
-                if dist < _MATCH_DISTANCE_THRESHOLD:
+                if dist < threshold:
                     matches.append((dist, di, hid))
-
         matches.sort(key=lambda m: m[0])
-        used_dots: set[int] = set()
         for dist, di, hid in matches:
-            if di in used_dots or hid in used_prev_ids:
+            if di not in remaining or hid in used_ids:
                 continue
             assigned.append((dots_xy[di][0], dots_xy[di][1], hid))
-            used_prev_ids.add(hid)
-            used_dots.add(di)
-        remaining_dots = [i for i in remaining_dots if i not in used_dots]
+            used_ids.add(hid)
+            remaining.discard(di)
 
-    # Second pass: assign new IDs to unmatched dots
-    for di in remaining_dots:
-        assigned.append((dots_xy[di][0], dots_xy[di][1], next_id_counter))
-        next_id_counter += 1
+    # Pass 1: match to active heroes
+    greedy_match(active, _MATCH_DISTANCE_THRESHOLD)
 
-    # Build updated positions for next frame
-    new_positions = {hid: (x, y) for x, y, hid in assigned}
+    # Pass 2: match to lost heroes
+    if remaining and lost:
+        greedy_match(lost, _LOST_MATCH_THRESHOLD)
 
-    return assigned, new_positions, next_id_counter
+    # Pass 3: new IDs or force-assign
+    all_known = {**active, **lost}
+    for di in list(remaining):
+        if next_id < _MAX_HEROES_PER_TEAM:
+            assigned.append((dots_xy[di][0], dots_xy[di][1], next_id))
+            used_ids.add(next_id)
+            next_id += 1
+        else:
+            # Force-assign to closest unused known hero
+            dx, dy = dots_xy[di]
+            best_dist, best_hid = float('inf'), None
+            for hid, (px, py) in all_known.items():
+                if hid in used_ids:
+                    continue
+                d = math.sqrt((dx - px) ** 2 + (dy - py) ** 2)
+                if d < best_dist:
+                    best_dist, best_hid = d, hid
+            if best_hid is not None:
+                assigned.append((dx, dy, best_hid))
+                used_ids.add(best_hid)
+        remaining.discard(di)
+
+    # Update state
+    new_active = {hid: (x, y) for x, y, hid in assigned}
+    new_lost = dict(lost)
+    for hid, pos in active.items():
+        if hid not in used_ids:
+            new_lost[hid] = pos
+    for hid in used_ids:
+        new_lost.pop(hid, None)
+
+    return assigned, new_active, new_lost, next_id
 
 
 def _detect_events(timeline: list[dict]) -> list[dict]:
@@ -340,12 +375,17 @@ def track_minimap(
     frame_idx = 0
 
     # Hero tracking state (persistent IDs across frames)
-    ally_prev: dict[int, tuple[float, float]] = {}
-    enemy_prev: dict[int, tuple[float, float]] = {}
+    ally_active: dict[int, tuple[float, float]] = {}
+    ally_lost: dict[int, tuple[float, float]] = {}
+    enemy_active: dict[int, tuple[float, float]] = {}
+    enemy_lost: dict[int, tuple[float, float]] = {}
     ally_next_id = 0
     enemy_next_id = 0
     all_ally_ids: set[str] = set()
     all_enemy_ids: set[str] = set()
+
+    # Capture the first minimap crop as background reference
+    minimap_bg_b64: str | None = None
 
     while True:
         ret, frame = cap.read()
@@ -360,17 +400,23 @@ def track_minimap(
                 frame_idx += 1
                 continue
 
+            # Capture background image from a frame ~10s in (skip loading screen)
+            if minimap_bg_b64 is None and frame_idx > fps * 10:
+                resized = cv2.resize(minimap, (200, 200), interpolation=cv2.INTER_AREA)
+                _, png_buf = cv2.imencode('.png', resized)
+                minimap_bg_b64 = base64.b64encode(png_buf.tobytes()).decode('ascii')
+
             minimap_hsv = cv2.cvtColor(minimap, cv2.COLOR_BGR2HSV)
 
             ally_dots = _find_dots(minimap_hsv, "ally", min_dot_area, max_dot_area)
             enemy_dots = _find_dots(minimap_hsv, "enemy", min_dot_area, max_dot_area)
 
             # Assign persistent hero IDs
-            ally_assigned, ally_prev, ally_next_id = _assign_hero_ids(
-                ally_dots, ally_prev, ally_next_id,
+            ally_assigned, ally_active, ally_lost, ally_next_id = _assign_hero_ids(
+                ally_dots, ally_active, ally_lost, ally_next_id,
             )
-            enemy_assigned, enemy_prev, enemy_next_id = _assign_hero_ids(
-                enemy_dots, enemy_prev, enemy_next_id,
+            enemy_assigned, enemy_active, enemy_lost, enemy_next_id = _assign_hero_ids(
+                enemy_dots, enemy_active, enemy_lost, enemy_next_id,
             )
 
             positions = []
@@ -392,7 +438,7 @@ def track_minimap(
 
     events = _detect_events(timeline)
 
-    return {
+    result: dict = {
         "timeline": timeline,
         "heroes": {
             "ally": sorted(all_ally_ids),
@@ -401,6 +447,10 @@ def track_minimap(
         "events": events,
         "minimap_region": {"x": mm_x, "y": mm_y, "width": mm_w, "height": mm_h},
     }
+    if minimap_bg_b64:
+        result["minimap_bg"] = minimap_bg_b64
+
+    return result
 
 
 def main() -> None:
