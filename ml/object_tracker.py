@@ -10,11 +10,12 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import cv2
 
 
-def _create_csrt_tracker() -> cv2.Tracker:
+def _create_csrt_tracker() -> Any:
     """Create a CSRT tracker, supporting both legacy and modern OpenCV APIs.
 
     Returns:

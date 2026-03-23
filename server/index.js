@@ -228,6 +228,24 @@ function runMLPipeline(filename, videoPath, resultPath) {
   });
 }
 
+// Rate limiter for clip extraction endpoints (ffmpeg is CPU-intensive)
+const clipRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many clip requests, please try again later.' },
+});
+
+// Rate limiter for object tracking endpoint (spawns OpenCV Python process)
+const trackRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many track requests, please try again later.' },
+});
+
 // Expose for testing
 app._jobs = jobs;
 app._runMLPipeline = runMLPipeline;
@@ -239,7 +257,7 @@ app._deleteTracksForVideo = deleteTracksForVideo;
 app._getTrackCachePath = getTrackCachePath;
 
 // Track an object in a video using OpenCV CSRT
-app.post('/track', async (req, res) => {
+app.post('/track', trackRateLimit, async (req, res) => {
   const { filename, time, bbox } = req.body;
 
   if (!filename || typeof filename !== 'string' || !filename.trim()) {
@@ -301,7 +319,9 @@ app.post('/track', async (req, res) => {
 
     child.on('close', (code) => {
       if (code !== 0) {
-        resolve(res.status(500).json({ error: `Tracker failed: ${stderr.trim()}` }));
+        // Redact the video path from error output to avoid leaking filesystem details
+        const errMsg = stderr.trim().replace(videoPath, '<video>') || `Tracker process exited with code ${code}`;
+        resolve(res.status(500).json({ error: `Tracker failed: ${errMsg}` }));
         return;
       }
       try {
@@ -321,7 +341,11 @@ app.post('/track', async (req, res) => {
 
 // List uploaded videos with processing status
 app.get('/uploads', (req, res) => {
-  const files = fs.readdirSync(uploadDir).filter((f) => f !== '.gitkeep' && !f.endsWith('.json'));
+  const files = fs.readdirSync(uploadDir).filter((f) => {
+    if (f === '.gitkeep' || f.endsWith('.json')) return false;
+    const fullPath = path.join(uploadDir, f);
+    return fs.statSync(fullPath).isFile();
+  });
   const uploads = files.map((filename) => {
     const job = jobs.get(filename);
     return {
@@ -477,15 +501,6 @@ function parseClipParams(query) {
     afterSec: Number.isFinite(after) ? after : 5,
   };
 }
-
-// Rate limiter for clip extraction endpoints (ffmpeg is CPU-intensive)
-const clipRateLimit = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many clip requests, please try again later.' },
-});
 
 /**
  * Delete all cached clips for a given video filename.
