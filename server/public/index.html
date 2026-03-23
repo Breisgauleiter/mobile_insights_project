@@ -328,8 +328,8 @@
 
     /* Video player */
     .video-wrap {
-      margin-bottom: 16px;
-      border-radius: 8px;
+      margin-bottom: 0;
+      border-radius: 0 0 8px 8px;
       overflow: hidden;
       background: #000;
     }
@@ -338,6 +338,85 @@
       width: 100%;
       display: block;
       max-height: 400px;
+    }
+
+    #videoAnnotationSection {
+      margin-bottom: 16px;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    #videoContainer {
+      position: relative;
+    }
+
+    /* Annotation toolbar */
+    .annotation-toolbar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 8px 10px;
+      background: #1e1e3a;
+      border-bottom: 1px solid #2a2a4a;
+    }
+
+    .annotation-toolbar.drawing-on {
+      border-bottom-color: #6c5ce7;
+    }
+
+    .ann-btn {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #e0e0e0;
+      border-radius: 5px;
+      padding: 4px 9px;
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1.4;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .ann-btn:hover { background: rgba(108,92,231,0.25); border-color: #6c5ce7; }
+    .ann-btn.active { background: #6c5ce7; border-color: #6c5ce7; color: #fff; }
+    .ann-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .ann-color-swatch {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+
+    .ann-color-swatch:hover { transform: scale(1.2); }
+    .ann-color-swatch.active { border-color: #fff; }
+
+    .ann-separator {
+      width: 1px;
+      height: 22px;
+      background: rgba(255,255,255,0.15);
+      flex-shrink: 0;
+      margin: 0 2px;
+    }
+
+    /* Canvas overlay */
+    #annotationCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+      pointer-events: none;
+    }
+
+    #annotationCanvas.drawing-on {
+      cursor: crosshair;
+      pointer-events: auto;
     }
 
     .highlight-card:hover {
@@ -373,8 +452,35 @@
         <button class="close-btn" id="closeResults">&times;</button>
       </div>
       <h3 id="resultsTitle">Results</h3>
-      <div class="video-wrap" id="videoWrap" style="display:none">
-        <video id="videoPlayer" controls preload="metadata"></video>
+      <div id="videoAnnotationSection" style="display:none">
+        <div id="annotationToolbar" class="annotation-toolbar">
+          <button id="drawToggleBtn" class="ann-btn" title="Toggle drawing mode">&#x1F58A;&#xFE0F; Draw</button>
+          <div class="ann-separator"></div>
+          <button class="ann-btn ann-tool-btn active" data-tool="freehand" title="Freehand pen">&#x270F;&#xFE0F;</button>
+          <button class="ann-btn ann-tool-btn" data-tool="arrow" title="Arrow">&#x27A1;&#xFE0F;</button>
+          <button class="ann-btn ann-tool-btn" data-tool="circle" title="Circle">&#x2B55;</button>
+          <button class="ann-btn ann-tool-btn" data-tool="rect" title="Rectangle">&#x2B1C;</button>
+          <button class="ann-btn ann-tool-btn" data-tool="text" title="Text">&#x1F524;</button>
+          <div class="ann-separator"></div>
+          <span class="ann-color-swatch active" data-color="#ff3333" style="background:#ff3333" title="Red" aria-label="Color: Red" role="button" tabindex="0"></span>
+          <span class="ann-color-swatch" data-color="#ffdd00" style="background:#ffdd00" title="Yellow" aria-label="Color: Yellow" role="button" tabindex="0"></span>
+          <span class="ann-color-swatch" data-color="#4488ff" style="background:#4488ff" title="Blue" aria-label="Color: Blue" role="button" tabindex="0"></span>
+          <span class="ann-color-swatch" data-color="#ffffff" style="background:#ffffff" title="White" aria-label="Color: White" role="button" tabindex="0"></span>
+          <span class="ann-color-swatch" data-color="#00cc66" style="background:#00cc66" title="Green" aria-label="Color: Green" role="button" tabindex="0"></span>
+          <div class="ann-separator"></div>
+          <button class="ann-btn ann-lw-btn active" data-lw="2" title="Thin line">&#x2500;</button>
+          <button class="ann-btn ann-lw-btn" data-lw="4" title="Medium line">&#x2501;</button>
+          <button class="ann-btn ann-lw-btn" data-lw="6" title="Thick line">&#x2588;</button>
+          <div class="ann-separator"></div>
+          <button id="undoBtn" class="ann-btn" title="Undo last shape">&#x21A9;&#xFE0F; Undo</button>
+          <button id="clearBtn" class="ann-btn" title="Clear all drawings">&#x1F5D1;&#xFE0F; Clear</button>
+        </div>
+        <div class="video-wrap" id="videoWrap">
+          <div id="videoContainer">
+            <video id="videoPlayer" controls preload="metadata"></video>
+            <canvas id="annotationCanvas"></canvas>
+          </div>
+        </div>
       </div>
       <div id="resultsContent"></div>
     </div>
@@ -398,6 +504,7 @@
     const resultsContent = document.getElementById('resultsContent');
     const closeResults = document.getElementById('closeResults');
     const reprocessBtn = document.getElementById('reprocessBtn');
+    const videoAnnotationSection = document.getElementById('videoAnnotationSection');
     const videoWrap = document.getElementById('videoWrap');
     const videoPlayer = document.getElementById('videoPlayer');
     const exportAllBtn = document.getElementById('exportAllBtn');
@@ -572,11 +679,12 @@
             if (currentResultsId === id) {
               resultsPanel.classList.remove('active');
               videoPlayer.pause();
-              videoWrap.style.display = 'none';
+              videoAnnotationSection.style.display = 'none';
               videoPlayer.src = '';
               currentVideoId = null;
               currentResultsId = null;
               reprocessBtn.disabled = true;
+              disableAnnotationMode();
             }
             loadUploads();
           } catch {
@@ -612,7 +720,8 @@
       if (currentVideoId !== id) {
         currentVideoId = id;
         videoPlayer.src = '/video/' + encodeURIComponent(id);
-        videoWrap.style.display = 'block';
+        videoAnnotationSection.style.display = 'block';
+        initAnnotationMode();
       }
 
       try {
@@ -708,7 +817,7 @@
             if (!isNaN(time)) {
               videoPlayer.currentTime = time;
               videoPlayer.play();
-              videoWrap.scrollIntoView({ behavior: 'smooth' });
+              videoAnnotationSection.scrollIntoView({ behavior: 'smooth' });
             }
           });
         });
@@ -721,12 +830,13 @@
     closeResults.addEventListener('click', () => {
       resultsPanel.classList.remove('active');
       videoPlayer.pause();
-      videoWrap.style.display = 'none';
+      videoAnnotationSection.style.display = 'none';
       videoPlayer.src = '';
       currentVideoId = null;
       currentResultsId = null;
       reprocessBtn.disabled = true;
       exportAllBtn.disabled = true;
+      disableAnnotationMode();
     });
 
     reprocessBtn.addEventListener('click', async () => {
@@ -764,6 +874,289 @@
       const d = document.createElement('div');
       d.textContent = str;
       return d.innerHTML;
+    }
+
+    // =====================
+    // ANNOTATION OVERLAY
+    // =====================
+
+    const annotationCanvas = document.getElementById('annotationCanvas');
+    const annotationCtx = annotationCanvas.getContext('2d');
+    const annotationToolbar = document.getElementById('annotationToolbar');
+    const drawToggleBtn = document.getElementById('drawToggleBtn');
+    const undoBtn = document.getElementById('undoBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const videoContainer = document.getElementById('videoContainer');
+
+    const ann = {
+      tool: 'freehand',
+      color: '#ff3333',
+      lineWidth: 2,
+      shapes: [],
+      currentShape: null,
+      drawing: false,
+      enabled: false,
+    };
+
+    function syncCanvasSize() {
+      const rect = videoContainer.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        annotationCanvas.width = rect.width;
+        annotationCanvas.height = rect.height;
+        redrawAll();
+      }
+    }
+
+    const canvasResizeObserver = new ResizeObserver(syncCanvasSize);
+
+    function initAnnotationMode() {
+      ann.shapes = [];
+      ann.currentShape = null;
+      ann.drawing = false;
+      ann.enabled = false;
+      annotationCanvas.classList.remove('drawing-on');
+      annotationToolbar.classList.remove('drawing-on');
+      drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Draw';
+      drawToggleBtn.classList.remove('active');
+      annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
+      canvasResizeObserver.observe(videoContainer);
+      setTimeout(syncCanvasSize, 0);
+    }
+
+    function disableAnnotationMode() {
+      canvasResizeObserver.unobserve(videoContainer);
+      ann.shapes = [];
+      ann.currentShape = null;
+      ann.drawing = false;
+      ann.enabled = false;
+      annotationCanvas.classList.remove('drawing-on');
+      annotationToolbar.classList.remove('drawing-on');
+      drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Draw';
+      drawToggleBtn.classList.remove('active');
+      annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
+    }
+
+    drawToggleBtn.addEventListener('click', () => {
+      ann.enabled = !ann.enabled;
+      if (ann.enabled) {
+        annotationCanvas.classList.add('drawing-on');
+        annotationToolbar.classList.add('drawing-on');
+        drawToggleBtn.textContent = '\u270B Move';
+        drawToggleBtn.classList.add('active');
+      } else {
+        annotationCanvas.classList.remove('drawing-on');
+        annotationToolbar.classList.remove('drawing-on');
+        drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Draw';
+        drawToggleBtn.classList.remove('active');
+      }
+    });
+
+    document.querySelectorAll('.ann-tool-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        ann.tool = btn.getAttribute('data-tool');
+        document.querySelectorAll('.ann-tool-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    document.querySelectorAll('.ann-color-swatch').forEach((swatch) => {
+      swatch.addEventListener('click', () => {
+        ann.color = swatch.getAttribute('data-color');
+        document.querySelectorAll('.ann-color-swatch').forEach((s) => s.classList.remove('active'));
+        swatch.classList.add('active');
+      });
+      swatch.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          swatch.click();
+        }
+      });
+    });
+
+    document.querySelectorAll('.ann-lw-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        ann.lineWidth = parseInt(btn.getAttribute('data-lw'), 10);
+        document.querySelectorAll('.ann-lw-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    undoBtn.addEventListener('click', () => {
+      ann.shapes.pop();
+      redrawAll();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      ann.shapes = [];
+      ann.currentShape = null;
+      ann.drawing = false;
+      annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
+    });
+
+    function getPoint(e) {
+      const rect = annotationCanvas.getBoundingClientRect();
+      const src = e.touches ? e.touches[0] : e;
+      return {
+        x: (src.clientX - rect.left) * (annotationCanvas.width / rect.width),
+        y: (src.clientY - rect.top) * (annotationCanvas.height / rect.height),
+      };
+    }
+
+    function onDrawStart(e) {
+      if (!ann.enabled) return;
+      e.preventDefault();
+      const pt = getPoint(e);
+
+      if (ann.tool === 'text') {
+        const text = prompt('Enter annotation text:');
+        if (text && text.trim()) {
+          ann.shapes.push({
+            type: 'text',
+            points: [pt],
+            color: ann.color,
+            lineWidth: ann.lineWidth,
+            text: text.trim(),
+          });
+          redrawAll();
+        }
+        return;
+      }
+
+      ann.drawing = true;
+      ann.currentShape = {
+        type: ann.tool,
+        points: [pt],
+        color: ann.color,
+        lineWidth: ann.lineWidth,
+      };
+    }
+
+    function onDrawMove(e) {
+      if (!ann.enabled || !ann.drawing || !ann.currentShape) return;
+      e.preventDefault();
+      const pt = getPoint(e);
+      if (ann.currentShape.type === 'freehand') {
+        ann.currentShape.points.push(pt);
+      } else {
+        if (ann.currentShape.points.length === 1) {
+          ann.currentShape.points.push(pt);
+        } else {
+          ann.currentShape.points[1] = pt;
+        }
+      }
+      redrawAll();
+    }
+
+    function onDrawEnd(e) {
+      if (!ann.enabled || !ann.drawing || !ann.currentShape) return;
+      if (e.cancelable) e.preventDefault();
+      const minPoints = ann.currentShape.type === 'freehand' ? 1 : 2;
+      if (ann.currentShape.points.length >= minPoints) {
+        ann.shapes.push(ann.currentShape);
+      }
+      ann.currentShape = null;
+      ann.drawing = false;
+      redrawAll();
+    }
+
+    annotationCanvas.addEventListener('mousedown', onDrawStart);
+    annotationCanvas.addEventListener('mousemove', onDrawMove);
+    annotationCanvas.addEventListener('mouseup', onDrawEnd);
+    annotationCanvas.addEventListener('mouseleave', onDrawEnd);
+    annotationCanvas.addEventListener('touchstart', onDrawStart, { passive: false });
+    annotationCanvas.addEventListener('touchmove', onDrawMove, { passive: false });
+    annotationCanvas.addEventListener('touchend', onDrawEnd);
+    annotationCanvas.addEventListener('touchcancel', onDrawEnd);
+
+    function redrawAll() {
+      annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
+      for (const shape of ann.shapes) {
+        drawShape(annotationCtx, shape);
+      }
+      if (ann.currentShape) {
+        drawShape(annotationCtx, ann.currentShape);
+      }
+    }
+
+    function drawShape(ctx, shape) {
+      if (!shape || !shape.points || !shape.points.length) return;
+      ctx.save();
+      ctx.strokeStyle = shape.color;
+      ctx.fillStyle = shape.color;
+      ctx.lineWidth = shape.lineWidth;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      switch (shape.type) {
+        case 'freehand':
+          ctx.beginPath();
+          if (shape.points.length === 1) {
+            ctx.arc(shape.points[0].x, shape.points[0].y, shape.lineWidth / 2, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            ctx.moveTo(shape.points[0].x, shape.points[0].y);
+            for (let i = 1; i < shape.points.length; i++) {
+              ctx.lineTo(shape.points[i].x, shape.points[i].y);
+            }
+            ctx.stroke();
+          }
+          break;
+
+        case 'arrow': {
+          if (shape.points.length < 2) break;
+          const [start, end] = shape.points;
+          const headLen = Math.max(15, shape.lineWidth * 4);
+          const angle = Math.atan2(end.y - start.y, end.x - start.x);
+          ctx.beginPath();
+          ctx.moveTo(start.x, start.y);
+          ctx.lineTo(end.x, end.y);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(end.x, end.y);
+          ctx.lineTo(
+            end.x - headLen * Math.cos(angle - Math.PI / 6),
+            end.y - headLen * Math.sin(angle - Math.PI / 6)
+          );
+          ctx.moveTo(end.x, end.y);
+          ctx.lineTo(
+            end.x - headLen * Math.cos(angle + Math.PI / 6),
+            end.y - headLen * Math.sin(angle + Math.PI / 6)
+          );
+          ctx.stroke();
+          break;
+        }
+
+        case 'circle': {
+          if (shape.points.length < 2) break;
+          const [center, edgePoint] = shape.points;
+          const r = Math.hypot(edgePoint.x - center.x, edgePoint.y - center.y);
+          ctx.beginPath();
+          ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
+          ctx.stroke();
+          break;
+        }
+
+        case 'rect': {
+          if (shape.points.length < 2) break;
+          const [p1, p2] = shape.points;
+          ctx.beginPath();
+          ctx.strokeRect(p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
+          break;
+        }
+
+        case 'text': {
+          if (!shape.text) break;
+          const fontSize = shape.lineWidth * 5 + 10;
+          ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+          ctx.fillText(shape.text, shape.points[0].x, shape.points[0].y);
+          break;
+        }
+
+        default:
+          break;
+      }
+
+      ctx.restore();
     }
 
     // Initial load
