@@ -538,3 +538,80 @@ describe('Clip cleanup on DELETE /uploads/:filename', () => {
     expect(fs.existsSync(clipB)).toBe(false);
   });
 });
+
+describe('POST /minimap-analysis', () => {
+  const testVideo = 'minimap-test-video.mp4';
+
+  beforeEach(() => {
+    cleanUploads();
+    fs.writeFileSync(path.join(uploadsDir, testVideo), 'fake video content');
+  });
+
+  afterEach(cleanUploads);
+
+  it('should return 400 when filename is missing', async () => {
+    const res = await request(app).post('/minimap-analysis').send({});
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 400 when body is empty', async () => {
+    const res = await request(app).post('/minimap-analysis');
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 404 when video does not exist', async () => {
+    const res = await request(app)
+      .post('/minimap-analysis')
+      .send({ filename: 'nonexistent.mp4' });
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 404 for .json files', async () => {
+    fs.writeFileSync(path.join(uploadsDir, 'secret.json'), '{}');
+    const res = await request(app)
+      .post('/minimap-analysis')
+      .send({ filename: 'secret.json' });
+    expect(res.statusCode).toBe(404);
+    fs.unlinkSync(path.join(uploadsDir, 'secret.json'));
+  });
+
+  it('should serve a cached minimap result if one exists', async () => {
+    const cacheFile = path.join(uploadsDir, testVideo + '.minimap.json');
+    const fakeResult = {
+      timeline: [{ time: 1.0, positions: [{ x: 0.1, y: 0.9, team: 'ally' }] }],
+      events: [],
+      minimap_region: { x: 0, y: 196, width: 43, height: 43 },
+    };
+    fs.writeFileSync(cacheFile, JSON.stringify(fakeResult));
+
+    const res = await request(app)
+      .post('/minimap-analysis')
+      .send({ filename: testVideo });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.timeline).toBeDefined();
+    expect(res.body.events).toBeDefined();
+    expect(res.body.minimap_region).toBeDefined();
+    expect(res.body.timeline).toHaveLength(1);
+    expect(res.body.timeline[0].time).toBe(1.0);
+  });
+
+  it('should sanitize filename with path traversal attempt', async () => {
+    const res = await request(app)
+      .post('/minimap-analysis')
+      .send({ filename: '../../etc/passwd' });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('should delete minimap cache file when video is deleted', async () => {
+    const cacheFile = path.join(uploadsDir, testVideo + '.minimap.json');
+    fs.writeFileSync(cacheFile, JSON.stringify({ timeline: [], events: [], minimap_region: {} }));
+    app._jobs.set(testVideo, { id: testVideo, status: 'done', highlights: [] });
+
+    const res = await request(app).delete(`/uploads/${encodeURIComponent(testVideo)}`);
+    expect(res.statusCode).toBe(200);
+    expect(fs.existsSync(cacheFile)).toBe(false);
+  });
+});
