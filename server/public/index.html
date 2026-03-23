@@ -427,6 +427,34 @@
       cursor: grabbing;
     }
 
+    #annotationCanvas.drawing-on.tool-track {
+      cursor: crosshair;
+    }
+
+    /* Tracking status indicator */
+    .track-status {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #a29bfe;
+      margin-left: 4px;
+    }
+
+    .track-status.visible { display: flex; }
+
+    .track-spinner {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(162,155,254,0.3);
+      border-top-color: #a29bfe;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     .highlight-card:hover {
       background: #1a1a2e;
     }
@@ -469,6 +497,7 @@
           <button class="ann-btn ann-tool-btn" data-tool="arrow" title="Arrow">&#x27A1;&#xFE0F;</button>
           <button class="ann-btn ann-tool-btn" data-tool="circle" title="Circle">&#x2B55;</button>
           <button class="ann-btn ann-tool-btn" data-tool="rect" title="Rectangle">&#x2B1C;</button>
+          <button class="ann-btn ann-tool-btn" data-tool="track" title="Track object (CSRT)">&#x1F3AF;</button>
           <button class="ann-btn ann-tool-btn" data-tool="text" title="Text">&#x1F524;</button>
           <div class="ann-separator"></div>
           <span class="ann-color-swatch active" data-color="#ff3333" style="background:#ff3333" title="Red" aria-label="Color: Red" role="button" tabindex="0"></span>
@@ -483,6 +512,10 @@
           <div class="ann-separator"></div>
           <button id="undoBtn" class="ann-btn" title="Undo last shape">&#x21A9;&#xFE0F; Undo</button>
           <button id="clearBtn" class="ann-btn" title="Clear all drawings">&#x1F5D1;&#xFE0F; Clear</button>
+          <span class="track-status" id="trackStatus">
+            <span class="track-spinner"></span>
+            Tracking...
+          </span>
         </div>
         <div class="video-wrap" id="videoWrap">
           <div id="videoContainer">
@@ -926,6 +959,7 @@
       ann.currentShape = null;
       ann.drawing = false;
       ann.enabled = false;
+      tracked.positions = [];
       annotationCanvas.classList.remove('drawing-on');
       annotationToolbar.classList.remove('drawing-on');
       drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Annotate';
@@ -941,6 +975,7 @@
       ann.currentShape = null;
       ann.drawing = false;
       ann.enabled = false;
+      tracked.positions = [];
       annotationCanvas.classList.remove('drawing-on');
       annotationToolbar.classList.remove('drawing-on');
       drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Annotate';
@@ -968,8 +1003,12 @@
     function updateCanvasCursor() {
       if (ann.tool === 'hand') {
         annotationCanvas.classList.add('tool-hand');
-      } else {
+        annotationCanvas.classList.remove('tool-track');
+      } else if (ann.tool === 'track') {
+        annotationCanvas.classList.add('tool-track');
         annotationCanvas.classList.remove('tool-hand', 'grabbing');
+      } else {
+        annotationCanvas.classList.remove('tool-hand', 'grabbing', 'tool-track');
       }
     }
 
@@ -1013,6 +1052,7 @@
       ann.shapes = [];
       ann.currentShape = null;
       ann.drawing = false;
+      tracked.positions = [];
       annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
     });
 
@@ -1118,10 +1158,12 @@
 
       ann.drawing = true;
       ann.currentShape = {
-        type: ann.tool,
+        // Track tool draws a rect (bbox) but marks it specially
+        type: ann.tool === 'track' ? 'rect' : ann.tool,
         points: [pt],
         color: ann.color,
         lineWidth: ann.lineWidth,
+        tracked: ann.tool === 'track',
       };
     }
 
@@ -1172,6 +1214,17 @@
       if (e.cancelable) e.preventDefault();
       const minPoints = ann.currentShape.type === 'freehand' ? 1 : 2;
       if (ann.currentShape.points.length >= minPoints) {
+        // If the track tool was used, prompt user and start tracking
+        if (ann.currentShape.tracked) {
+          const shape = ann.currentShape;
+          ann.currentShape = null;
+          ann.drawing = false;
+          redrawAll();
+          if (confirm('Track this object?')) {
+            startTracking(shape);
+          }
+          return;
+        }
         ann.shapes.push(ann.currentShape);
       }
       ann.currentShape = null;
@@ -1188,6 +1241,154 @@
     annotationCanvas.addEventListener('touchend', onDrawEnd);
     annotationCanvas.addEventListener('touchcancel', onDrawEnd);
 
+    // =====================
+    // OBJECT TRACKING
+    // =====================
+
+    const tracked = {
+      positions: [],  // [{time, x, y, w, h}] in video pixel coordinates
+      color: '#ff3333',
+      lineWidth: 2,
+    };
+
+    const trackStatusEl = document.getElementById('trackStatus');
+
+    function setTrackStatus(visible) {
+      trackStatusEl.classList.toggle('visible', visible);
+    }
+
+    /**
+     * Convert a canvas-coordinate rect (two points) to a video-pixel bbox.
+     * Accounts for the difference between canvas display size and video resolution.
+     */
+    function canvasRectToVideoBbox(p1, p2) {
+      const vw = videoPlayer.videoWidth;
+      const vh = videoPlayer.videoHeight;
+      const cw = annotationCanvas.width;
+      const ch = annotationCanvas.height;
+      if (!vw || !vh || !cw || !ch) return null;
+
+      const scaleX = vw / cw;
+      const scaleY = vh / ch;
+
+      const x = Math.round(Math.min(p1.x, p2.x) * scaleX);
+      const y = Math.round(Math.min(p1.y, p2.y) * scaleY);
+      const w = Math.round(Math.abs(p2.x - p1.x) * scaleX);
+      const h = Math.round(Math.abs(p2.y - p1.y) * scaleY);
+      return { x, y, w, h };
+    }
+
+    /**
+     * Convert a video-pixel position to canvas coordinates.
+     */
+    function videoPosToCanvas(pos) {
+      const vw = videoPlayer.videoWidth;
+      const vh = videoPlayer.videoHeight;
+      const cw = annotationCanvas.width;
+      const ch = annotationCanvas.height;
+      if (!vw || !vh || !cw || !ch) return pos;
+
+      const scaleX = cw / vw;
+      const scaleY = ch / vh;
+      return {
+        x: pos.x * scaleX,
+        y: pos.y * scaleY,
+        w: pos.w * scaleX,
+        h: pos.h * scaleY,
+      };
+    }
+
+    /**
+     * Interpolate the tracked position at a given video time.
+     * Returns canvas-coordinate rect or null if outside tracking range.
+     */
+    function interpolateTrackedPos(time) {
+      const positions = tracked.positions;
+      if (!positions.length) return null;
+
+      if (time < positions[0].time) return null;
+
+      const last = positions[positions.length - 1];
+      if (time >= last.time) {
+        return videoPosToCanvas(last);
+      }
+
+      for (let i = 0; i < positions.length - 1; i++) {
+        const p0 = positions[i];
+        const p1 = positions[i + 1];
+        if (time >= p0.time && time < p1.time) {
+          const alpha = (time - p0.time) / (p1.time - p0.time);
+          return videoPosToCanvas({
+            x: p0.x + (p1.x - p0.x) * alpha,
+            y: p0.y + (p1.y - p0.y) * alpha,
+            w: p0.w + (p1.w - p0.w) * alpha,
+            h: p0.h + (p1.h - p0.h) * alpha,
+          });
+        }
+      }
+      return null;
+    }
+
+    /** Draw the tracked shape with a dashed outline at the given canvas rect. */
+    function drawTrackedRect(ctx, canvasPos) {
+      if (!canvasPos) return;
+      ctx.save();
+      ctx.strokeStyle = tracked.color;
+      ctx.lineWidth = tracked.lineWidth + 1;
+      ctx.setLineDash([6, 3]);
+      ctx.lineDashOffset = 0;
+      ctx.beginPath();
+      ctx.strokeRect(canvasPos.x, canvasPos.y, canvasPos.w, canvasPos.h);
+      ctx.restore();
+    }
+
+    /** Send a track request to the server and store results. */
+    async function startTracking(shape) {
+      if (!currentVideoId) return;
+
+      const bbox = canvasRectToVideoBbox(shape.points[0], shape.points[1]);
+      if (!bbox || bbox.w <= 0 || bbox.h <= 0) {
+        alert('Bounding box is too small to track.');
+        return;
+      }
+
+      const startTime = videoPlayer.currentTime;
+      tracked.positions = [];
+      tracked.color = shape.color;
+      tracked.lineWidth = shape.lineWidth;
+      setTrackStatus(true);
+
+      try {
+        const res = await fetch('/track', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: currentVideoId,
+            time: startTime,
+            bbox,
+          }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert('Tracking failed: ' + (data.error || String(res.status)));
+          return;
+        }
+        const data = await res.json();
+        tracked.positions = data.positions || [];
+        redrawAll();
+      } catch (err) {
+        alert('Tracking request failed: ' + err.message);
+      } finally {
+        setTrackStatus(false);
+      }
+    }
+
+    // Update tracked shape during video playback
+    videoPlayer.addEventListener('timeupdate', () => {
+      if (!tracked.positions.length) return;
+      redrawAll();
+    });
+
     function redrawAll() {
       annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
       for (const shape of ann.shapes) {
@@ -1195,6 +1396,11 @@
       }
       if (ann.currentShape) {
         drawShape(annotationCtx, ann.currentShape);
+      }
+      // Draw tracked shape at current video time
+      if (tracked.positions.length) {
+        const canvasPos = interpolateTrackedPos(videoPlayer.currentTime);
+        drawTrackedRect(annotationCtx, canvasPos);
       }
     }
 

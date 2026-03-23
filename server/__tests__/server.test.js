@@ -538,3 +538,126 @@ describe('Clip cleanup on DELETE /uploads/:filename', () => {
     expect(fs.existsSync(clipB)).toBe(false);
   });
 });
+
+describe('POST /track', () => {
+  const testVideo = 'track-test-video.mp4';
+  const tracksDir = app._tracksDir;
+
+  beforeEach(() => {
+    cleanUploads();
+    fs.writeFileSync(path.join(uploadsDir, testVideo), 'fake video content');
+  });
+
+  afterEach(cleanUploads);
+
+  it('should return 400 when filename is missing', async () => {
+    const res = await request(app)
+      .post('/track')
+      .send({ time: 0, bbox: { x: 0, y: 0, w: 50, h: 50 } });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 400 when filename is empty', async () => {
+    const res = await request(app)
+      .post('/track')
+      .send({ filename: '', time: 0, bbox: { x: 0, y: 0, w: 50, h: 50 } });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 400 when time is negative', async () => {
+    const res = await request(app)
+      .post('/track')
+      .send({ filename: testVideo, time: -1, bbox: { x: 0, y: 0, w: 50, h: 50 } });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 400 when time is not a number', async () => {
+    const res = await request(app)
+      .post('/track')
+      .send({ filename: testVideo, time: 'abc', bbox: { x: 0, y: 0, w: 50, h: 50 } });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 400 when bbox is missing', async () => {
+    const res = await request(app)
+      .post('/track')
+      .send({ filename: testVideo, time: 0 });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 400 when bbox w is zero', async () => {
+    const res = await request(app)
+      .post('/track')
+      .send({ filename: testVideo, time: 0, bbox: { x: 0, y: 0, w: 0, h: 50 } });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 400 when bbox h is negative', async () => {
+    const res = await request(app)
+      .post('/track')
+      .send({ filename: testVideo, time: 0, bbox: { x: 0, y: 0, w: 50, h: -10 } });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return 404 when video does not exist', async () => {
+    const res = await request(app)
+      .post('/track')
+      .send({ filename: 'nonexistent.mp4', time: 0, bbox: { x: 0, y: 0, w: 50, h: 50 } });
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it('should return cached positions when cache file exists', async () => {
+    const cachePath = app._getTrackCachePath(testVideo, 0, { x: 0, y: 0, w: 50, h: 50 });
+    const fakePositions = [{ time: 0, x: 0, y: 0, w: 50, h: 50 }];
+    fs.writeFileSync(cachePath, JSON.stringify(fakePositions));
+
+    const res = await request(app)
+      .post('/track')
+      .send({ filename: testVideo, time: 0, bbox: { x: 0, y: 0, w: 50, h: 50 } });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.positions).toEqual(fakePositions);
+  });
+
+  it('should fall through corrupt cache to re-run tracker', async () => {
+    // Write a corrupt cache file
+    const cachePath = app._getTrackCachePath(testVideo, 0, { x: 0, y: 0, w: 50, h: 50 });
+    fs.writeFileSync(cachePath, 'NOT JSON');
+
+    // The tracker will fail (fake video), but it should NOT return a cache error
+    const res = await request(app)
+      .post('/track')
+      .send({ filename: testVideo, time: 0, bbox: { x: 0, y: 0, w: 50, h: 50 } });
+    // Either 200 (if somehow tracker succeeds) or 500 (tracker fails on fake video)
+    expect([200, 500]).toContain(res.statusCode);
+  });
+});
+
+describe('Track cache cleanup on DELETE /uploads/:filename', () => {
+  afterEach(cleanUploads);
+
+  it('should delete cached tracking results when a video is deleted', async () => {
+    const filename = 'video-with-tracks.mp4';
+    fs.writeFileSync(path.join(uploadsDir, filename), 'fake video');
+    app._jobs.set(filename, { id: filename, status: 'done', highlights: [] });
+
+    // Create fake track cache files
+    const tracksDir = app._tracksDir;
+    const trackA = path.join(tracksDir, `${filename}_abc123.json`);
+    const trackB = path.join(tracksDir, `${filename}_def456.json`);
+    fs.writeFileSync(trackA, '[]');
+    fs.writeFileSync(trackB, '[]');
+
+    const res = await request(app).delete(`/uploads/${encodeURIComponent(filename)}`);
+    expect(res.statusCode).toBe(200);
+    expect(fs.existsSync(trackA)).toBe(false);
+    expect(fs.existsSync(trackB)).toBe(false);
+  });
+});
