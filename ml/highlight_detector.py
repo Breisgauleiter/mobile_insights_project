@@ -3,8 +3,8 @@
 Highlight Detector for Mobile Insights.
 
 Multi-signal pipeline that combines frame-difference analysis,
-color-burst detection, and audio event recognition (Whisper)
-to detect gameplay highlights with event-type classification.
+color-burst detection, audio event recognition (Whisper), and
+kill-feed OCR to detect gameplay highlights with event-type classification.
 """
 import argparse
 import json
@@ -16,6 +16,7 @@ import numpy as np
 
 from audio_detector import detect_audio_events, detect_volume_events
 from color_detector import detect_color_bursts
+from killfeed_detector import detect_killfeed
 
 
 def _report_progress(percent: int, stage: str) -> None:
@@ -148,12 +149,15 @@ def detect_highlights(
     enable_audio: bool = True,
     enable_color: bool = True,
     enable_volume: bool = True,
+    enable_killfeed: bool = True,
     debug: bool = False,
+    kills_out: list | None = None,
 ) -> list[dict]:
     """Run the multi-signal highlight detection pipeline.
 
-    Combines frame-difference, color-burst, audio event, and volume-based
-    detectors into a single ranked list of highlights with event types.
+    Combines frame-difference, color-burst, audio event, volume-based, and
+    kill-feed OCR detectors into a single ranked list of highlights with
+    event-type classification.
 
     Args:
         video_path: Path to the video file.
@@ -166,7 +170,12 @@ def detect_highlights(
         enable_audio: Whether to run audio detection.
         enable_color: Whether to run color-burst detection.
         enable_volume: Whether to run volume-based fallback detection.
+        enable_killfeed: Whether to run kill-feed OCR detection.
         debug: When True, print Whisper transcription segments to stderr.
+        kills_out: Optional list that will be populated with raw kill events
+            ``{time, killer, victim}`` detected by the kill-feed OCR step.
+            Pass an empty list to receive structured kill data without a
+            second call to ``detect_killfeed``.
 
     Returns:
         List of dicts with 'timestamp', 'score', 'type', and 'sources'.
@@ -226,6 +235,24 @@ def detect_highlights(
             all_events.extend(color_events)
         except (FileNotFoundError, RuntimeError, OSError) as exc:
             print(f"[warn] Color detection skipped: {exc}", file=sys.stderr)
+
+    # 5. Kill-feed OCR detector
+    if enable_killfeed:
+        _report_progress(90, "killfeed")
+        try:
+            kill_events = detect_killfeed(video_path)
+            if kills_out is not None:
+                kills_out.extend(kill_events)
+            for e in kill_events:
+                all_events.append({
+                    "timestamp": e["time"],
+                    "score": 85.0,
+                    "type": "kill",
+                    "sources": ["killfeed"],
+                })
+        except (ImportError, FileNotFoundError, RuntimeError, OSError) as exc:
+            print(f"[warn] Kill-feed detection skipped: {exc}", file=sys.stderr)
+
     _report_progress(100, "done")
 
     # Combine events that are close in time
@@ -299,11 +326,16 @@ def main() -> None:
     parser.add_argument("--no-audio", action="store_true", help="Disable audio detection")
     parser.add_argument("--no-color", action="store_true", help="Disable color-burst detection")
     parser.add_argument("--no-volume", action="store_true", help="Disable volume-based fallback detection")
+    parser.add_argument("--no-killfeed", action="store_true", help="Disable kill-feed OCR detection")
     parser.add_argument("--debug", action="store_true", help="Print Whisper transcription segments to stderr")
     parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
     parser.add_argument("--output", type=str, default=None, help="Output file path (default: stdout)")
     args = parser.parse_args()
 
+    enable_killfeed = not args.no_killfeed
+
+    # kills_out collects raw kill events from inside detect_highlights (no double call)
+    kills: list[dict] = []
     highlights = detect_highlights(
         args.video, args.threshold, args.cooldown, args.max,
         skip_frames=args.skip_frames, max_width=args.max_width,
@@ -311,11 +343,13 @@ def main() -> None:
         enable_audio=not args.no_audio,
         enable_color=not args.no_color,
         enable_volume=not args.no_volume,
+        enable_killfeed=enable_killfeed,
         debug=args.debug,
+        kills_out=kills if enable_killfeed else None,
     )
 
     if args.format == "json":
-        result = json.dumps({"highlights": highlights}, indent=2)
+        result = json.dumps({"highlights": highlights, "kills": kills}, indent=2)
     else:
         lines = []
         for h in highlights:
@@ -325,6 +359,9 @@ def main() -> None:
                 f"Highlight at {h['timestamp']}s "
                 f"(score: {h['score']}, type: {event_type}, sources: {sources})"
             )
+        for k in kills:
+            assist_str = f" (assist: {k['assist']})" if k.get("assist") else ""
+            lines.append(f"Kill at {k['time']}s: {k['killer']} killed {k['victim']}{assist_str}")
         result = "\n".join(lines) if lines else "No highlights detected."
 
     if args.output:

@@ -312,6 +312,50 @@
       font-size: 14px;
     }
 
+    /* Kill timeline */
+    .kill-timeline {
+      margin-top: 24px;
+    }
+
+    .kill-timeline h4 {
+      font-size: 13px;
+      color: #fff;
+      font-weight: 600;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #1e1e3a;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .kill-event {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      background: #12122a;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+      font-size: 12px;
+    }
+
+    .kill-event:hover { background: #1e1e3a; }
+
+    .kill-event .kill-time {
+      color: #6c5ce7;
+      font-variant-numeric: tabular-nums;
+      min-width: 44px;
+      font-weight: 600;
+    }
+
+    .kill-event .kill-killer { color: #ff6b6b; font-weight: 600; }
+    .kill-event .kill-sep { color: #636e72; }
+    .kill-event .kill-victim { color: #a0a0c0; }
+    .kill-event .kill-assist { color: #fdcb6e; font-size: 11px; }
+
     .status-msg {
       text-align: center;
       color: #a0a0c0;
@@ -830,6 +874,39 @@
             }
           });
         });
+
+        // Render kill timeline if kills are available
+        const kills = Array.isArray(data.kills) ? data.kills : [];
+        if (kills.length > 0) {
+          const killHtml = kills.map((k) => {
+            const t = Number.isFinite(Number(k.time)) ? Number(k.time) : 0;
+            const assistStr = k.assist ? `<span class="kill-assist">(+${esc(String(k.assist))})</span>` : '';
+            return `<div class="kill-event" data-time="${t}">
+              <span class="kill-time">${formatTime(t)}</span>
+              <span class="kill-killer">${esc(String(k.killer))}</span>
+              <span class="kill-sep">⚔</span>
+              <span class="kill-victim">${esc(String(k.victim))}</span>
+              ${assistStr}
+            </div>`;
+          }).join('');
+
+          const killSection = document.createElement('div');
+          killSection.className = 'kill-timeline';
+          killSection.innerHTML = `<h4>&#x2694;&#xFE0F; Kill Timeline (${kills.length})</h4>${killHtml}`;
+          resultsContent.appendChild(killSection);
+
+          // Seek on kill event click
+          killSection.querySelectorAll('.kill-event[data-time]').forEach((row) => {
+            row.addEventListener('click', () => {
+              const time = parseFloat(row.getAttribute('data-time'));
+              if (!isNaN(time)) {
+                videoPlayer.currentTime = time;
+                videoPlayer.play();
+                videoAnnotationSection.scrollIntoView({ behavior: 'smooth' });
+              }
+            });
+          });
+        }
       } catch {
         resultsContent.innerHTML =
           '<div class="no-highlights">Failed to load results</div>';

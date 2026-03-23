@@ -24,10 +24,12 @@ function restoreJobs() {
       const raw = fs.readFileSync(path.join(uploadDir, jsonFile), 'utf-8');
       const data = JSON.parse(raw);
       const highlights = Array.isArray(data.highlights) ? data.highlights : [];
+      const kills = Array.isArray(data.kills) ? data.kills : [];
       jobs.set(videoFile, {
         id: videoFile,
         status: 'done',
         highlights,
+        kills,
       });
     } catch {
       // skip corrupt files
@@ -119,7 +121,7 @@ app.post('/upload', (req, res, next) => {
     const resultPath = path.join(uploadDir, filename + '.json');
 
     // Set initial status
-    jobs.set(filename, { id: filename, status: 'pending', highlights: [] });
+    jobs.set(filename, { id: filename, status: 'pending', highlights: [], kills: [] });
 
     // Spawn ML pipeline asynchronously
     runMLPipeline(filename, videoPath, resultPath);
@@ -133,7 +135,7 @@ app.post('/upload', (req, res, next) => {
  * Updates the jobs Map with status and results.
  */
 function runMLPipeline(filename, videoPath, resultPath) {
-  jobs.set(filename, { id: filename, status: 'processing', highlights: [], progress: 0, stage: 'starting', startedAt: Date.now() });
+  jobs.set(filename, { id: filename, status: 'processing', highlights: [], kills: [], progress: 0, stage: 'starting', startedAt: Date.now() });
 
   const args = [
     ML_SCRIPT,
@@ -188,6 +190,7 @@ function runMLPipeline(filename, videoPath, resultPath) {
         status: 'error',
         error: stderrBuf.trim() || `ML process exited with code ${code}`,
         highlights: [],
+        kills: [],
       });
       return;
     }
@@ -199,6 +202,7 @@ function runMLPipeline(filename, videoPath, resultPath) {
         id: filename,
         status: 'done',
         highlights: data.highlights || [],
+        kills: Array.isArray(data.kills) ? data.kills : [],
       });
     } catch (e) {
       jobs.set(filename, {
@@ -206,6 +210,7 @@ function runMLPipeline(filename, videoPath, resultPath) {
         status: 'error',
         error: 'Failed to parse ML results',
         highlights: [],
+        kills: [],
       });
     }
   });
@@ -216,6 +221,7 @@ function runMLPipeline(filename, videoPath, resultPath) {
       status: 'error',
       error: err.message,
       highlights: [],
+      kills: [],
     });
   });
 }
