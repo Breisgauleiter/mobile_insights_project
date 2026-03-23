@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
 const rateLimit = require('express-rate-limit');
@@ -38,6 +39,7 @@ function restoreJobs() {
 // Path to the ML scripts
 const ML_SCRIPT = path.resolve(__dirname, '..', 'ml', 'highlight_detector.py');
 const MINIMAP_SCRIPT = path.resolve(__dirname, '..', 'ml', 'minimap_tracker.py');
+const TRACKER_SCRIPT = path.resolve(__dirname, '..', 'ml', 'object_tracker.py');
 const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
 
 // ML performance tuning (set via env for local dev, 0 = full quality for prod)
@@ -62,6 +64,12 @@ if (!fs.existsSync(uploadDir)) {
 const clipsDir = path.join(uploadDir, '.clips');
 if (!fs.existsSync(clipsDir)) {
   fs.mkdirSync(clipsDir);
+}
+
+// Create tracking results cache directory
+const tracksDir = path.join(uploadDir, '.tracks');
+if (!fs.existsSync(tracksDir)) {
+  fs.mkdirSync(tracksDir);
 }
 
 restoreJobs();
@@ -221,12 +229,33 @@ function runMLPipeline(filename, videoPath, resultPath) {
   });
 }
 
+// Rate limiter for clip extraction endpoints (ffmpeg is CPU-intensive)
+const clipRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many clip requests, please try again later.' },
+});
+
+// Rate limiter for object tracking endpoint (spawns OpenCV Python process)
+const trackRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many track requests, please try again later.' },
+});
+
 // Expose for testing
 app._jobs = jobs;
 app._runMLPipeline = runMLPipeline;
 app._restoreJobs = restoreJobs;
 app._clipsDir = clipsDir;
+app._tracksDir = tracksDir;
 app._deleteClipsForVideo = deleteClipsForVideo;
+app._deleteTracksForVideo = deleteTracksForVideo;
+app._getTrackCachePath = getTrackCachePath;
 app._minimapScript = MINIMAP_SCRIPT;
 
 // Rate limiter for minimap analysis (spawns a Python subprocess)
@@ -238,9 +267,105 @@ const minimapRateLimit = rateLimit({
   message: { error: 'Too many minimap analysis requests, please try again later.' },
 });
 
+// Track an object in a video using OpenCV CSRT
+app.post('/track', trackRateLimit, async (req, res) => {
+  const { filename, time, bbox } = req.body;
+
+  if (!filename || typeof filename !== 'string' || !filename.trim()) {
+    return res.status(400).json({ error: 'filename is required' });
+  }
+  if (typeof time !== 'number' || !Number.isFinite(time) || time < 0) {
+    return res.status(400).json({ error: 'time must be a non-negative number' });
+  }
+  if (
+    !bbox ||
+    !Number.isFinite(bbox.x) ||
+    !Number.isFinite(bbox.y) ||
+    !Number.isFinite(bbox.w) ||
+    !Number.isFinite(bbox.h)
+  ) {
+    return res.status(400).json({ error: 'bbox must have finite numeric x, y, w, h' });
+  }
+  if (bbox.w <= 0 || bbox.h <= 0) {
+    return res.status(400).json({ error: 'bbox w and h must be positive' });
+  }
+
+  const safeFilename = path.basename(filename);
+  const videoPath = path.join(uploadDir, safeFilename);
+
+  if (!fs.existsSync(videoPath) || safeFilename.endsWith('.json')) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+
+  const cachePath = getTrackCachePath(safeFilename, time, bbox);
+
+  if (fs.existsSync(cachePath)) {
+    try {
+      const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+      return res.json({ positions: cached });
+    } catch {
+      // Corrupt cache — fall through to re-run
+    }
+  }
+
+  const args = [
+    TRACKER_SCRIPT,
+    videoPath,
+    String(time),
+    String(Math.round(bbox.x)),
+    String(Math.round(bbox.y)),
+    String(Math.round(bbox.w)),
+    String(Math.round(bbox.h)),
+    '--duration', '30',
+    '--fps', '5',
+  ];
+
+  return new Promise((resolve) => {
+    const child = spawn(PYTHON_BIN, args, { stdio: 'pipe' });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        // Log full stderr server-side; return a generic message to the client
+        const MAX_LOG = 2000;
+        let logMsg = stderr.trim()
+          .replaceAll(videoPath, '<video>')
+          .replaceAll(String(TRACKER_SCRIPT), '<tracker_script>')
+          .replaceAll(__dirname, '<server_dir>');
+        if (logMsg.length > MAX_LOG) {
+          logMsg = logMsg.slice(0, MAX_LOG) + '…[truncated]';
+        }
+        console.error('Tracker process failed:', logMsg || `exited with code ${code}`);
+        resolve(res.status(500).json({ error: 'Tracker failed' }));
+        return;
+      }
+      try {
+        const positions = JSON.parse(stdout.trim());
+        fs.writeFileSync(cachePath, JSON.stringify(positions));
+        resolve(res.json({ positions }));
+      } catch {
+        resolve(res.status(500).json({ error: 'Failed to parse tracker output' }));
+      }
+    });
+
+    child.on('error', (err) => {
+      resolve(res.status(500).json({ error: `Tracker spawn error: ${err.message}` }));
+    });
+  });
+});
+});
+
 // List uploaded videos with processing status
 app.get('/uploads', (req, res) => {
-  const files = fs.readdirSync(uploadDir).filter((f) => f !== '.gitkeep' && !f.endsWith('.json'));
+  const files = fs.readdirSync(uploadDir).filter((f) => {
+    if (f === '.gitkeep' || f.endsWith('.json')) return false;
+    const fullPath = path.join(uploadDir, f);
+    return fs.statSync(fullPath).isFile();
+  });
   const uploads = files.map((filename) => {
     const job = jobs.get(filename);
     return {
@@ -359,6 +484,7 @@ app.delete('/uploads/:filename', (req, res) => {
   }
 
   deleteClipsForVideo(filename);
+  deleteTracksForVideo(filename);
   jobs.delete(filename);
 
   return res.status(200).json({ message: 'Deleted' });
@@ -462,15 +588,6 @@ function parseClipParams(query) {
   };
 }
 
-// Rate limiter for clip extraction endpoints (ffmpeg is CPU-intensive)
-const clipRateLimit = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many clip requests, please try again later.' },
-});
-
 /**
  * Delete all cached clips for a given video filename.
  */
@@ -522,6 +639,35 @@ function extractClip(videoPath, outputPath, start, duration) {
       reject(new Error(`ffmpeg spawn error: ${err.message}`));
     });
   });
+}
+
+/**
+ * Delete all cached tracking results for a given video filename.
+ */
+function deleteTracksForVideo(filename) {
+  if (!fs.existsSync(tracksDir)) return;
+  const prefix = filename + '_';
+  const entries = fs.readdirSync(tracksDir);
+  for (const entry of entries) {
+    if (entry.startsWith(prefix)) {
+      try {
+        fs.unlinkSync(path.join(tracksDir, entry));
+      } catch {
+        // ignore errors during cleanup
+      }
+    }
+  }
+}
+
+/**
+ * Compute the cache file path for a track request.
+ */
+function getTrackCachePath(filename, time, bbox) {
+  const hash = crypto
+    .createHash('md5')
+    .update(`${time}:${bbox.x}:${bbox.y}:${bbox.w}:${bbox.h}`)
+    .digest('hex');
+  return path.join(tracksDir, `${filename}_${hash}.json`);
 }
 
 // Extract and serve a highlight clip
