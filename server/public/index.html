@@ -589,9 +589,14 @@
       </div>
       <h3 id="resultsTitle">Results</h3>
       <!-- Tab bar -->
-      <div class="result-tabs" id="resultTabs">
-        <button class="result-tab active" data-tab="highlights" aria-label="Highlights tab">&#x1F3AF; Highlights</button>
-        <button class="result-tab" data-tab="minimap" aria-label="Minimap tab">&#x1F5FA;&#xFE0F; Minimap</button>
+      <div
+        class="result-tabs"
+        id="resultTabs"
+        role="tablist"
+        aria-label="Result views"
+      >
+        <button class="result-tab active" data-tab="highlights" aria-label="Highlights tab" role="tab" aria-selected="true" tabindex="0">&#x1F3AF; Highlights</button>
+        <button class="result-tab" data-tab="minimap" aria-label="Minimap tab" role="tab" aria-selected="false" tabindex="-1">&#x1F5FA;&#xFE0F; Minimap</button>
       </div>
       <div id="videoAnnotationSection" style="display:none">
         <div id="annotationToolbar" class="annotation-toolbar">
@@ -683,21 +688,44 @@
     let minimapEvents = [];
     let minimapFrameIndex = 0;
 
-    // Tab switching
+    // Tab switching — click handler + aria-selected state management
     document.querySelectorAll('.result-tab').forEach((tab) => {
       tab.addEventListener('click', () => {
         activeTab = tab.getAttribute('data-tab');
-        document.querySelectorAll('.result-tab').forEach((t) => t.classList.remove('active'));
-        tab.classList.add('active');
+        document.querySelectorAll('.result-tab').forEach((t) => {
+          const isActive = t === tab;
+          t.classList.toggle('active', isActive);
+          t.setAttribute('aria-selected', isActive ? 'true' : 'false');
+          t.setAttribute('tabindex', isActive ? '0' : '-1');
+        });
         if (activeTab === 'highlights') {
           resultsContent.style.display = '';
           minimapContent.style.display = 'none';
         } else {
           resultsContent.style.display = 'none';
           minimapContent.style.display = '';
-          if (currentResultsId) loadMinimap(currentResultsId);
+          // Only fetch if minimap data hasn't been loaded yet for this video
+          if (currentResultsId && minimapTimeline.length === 0) {
+            loadMinimap(currentResultsId);
+          }
         }
       });
+    });
+
+    // Keyboard arrow navigation for the tab bar
+    document.getElementById('resultTabs').addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return;
+      const tabs = Array.from(document.querySelectorAll('#resultTabs [role="tab"]'));
+      const currentIdx = tabs.indexOf(document.activeElement);
+      if (currentIdx === -1) return;
+      let newIdx = currentIdx;
+      if (e.key === 'ArrowRight') { newIdx = (currentIdx + 1) % tabs.length; }
+      else if (e.key === 'ArrowLeft') { newIdx = (currentIdx - 1 + tabs.length) % tabs.length; }
+      else if (e.key === 'Home') { newIdx = 0; }
+      else if (e.key === 'End') { newIdx = tabs.length - 1; }
+      e.preventDefault();
+      tabs[newIdx].focus();
+      tabs[newIdx].click();
     });
 
     // Drag & drop
@@ -907,7 +935,10 @@
       if (currentVideoId !== id) {
         activeTab = 'highlights';
         document.querySelectorAll('.result-tab').forEach((t) => {
-          t.classList.toggle('active', t.getAttribute('data-tab') === 'highlights');
+          const isHighlights = t.getAttribute('data-tab') === 'highlights';
+          t.classList.toggle('active', isHighlights);
+          t.setAttribute('aria-selected', isHighlights ? 'true' : 'false');
+          t.setAttribute('tabindex', isHighlights ? '0' : '-1');
         });
         resultsContent.style.display = '';
         minimapContent.style.display = 'none';
@@ -1037,7 +1068,10 @@
       exportAllBtn.disabled = true;
       activeTab = 'highlights';
       document.querySelectorAll('.result-tab').forEach((t) => {
-        t.classList.toggle('active', t.getAttribute('data-tab') === 'highlights');
+        const isHighlights = t.getAttribute('data-tab') === 'highlights';
+        t.classList.toggle('active', isHighlights);
+        t.setAttribute('aria-selected', isHighlights ? 'true' : 'false');
+        t.setAttribute('tabindex', isHighlights ? '0' : '-1');
       });
       resultsContent.style.display = '';
       minimapContent.style.display = 'none';
@@ -1203,17 +1237,31 @@
       drawMinimapFrame(idx);
     });
 
+    // Binary search: find closest minimap frame index for a given time value
+    function findClosestMinimapIndex(t) {
+      const len = minimapTimeline.length;
+      if (len === 0) return 0;
+      if (t <= minimapTimeline[0].time) return 0;
+      if (t >= minimapTimeline[len - 1].time) return len - 1;
+      let lo = 0;
+      let hi = len - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >>> 1;
+        const midTime = minimapTimeline[mid].time;
+        if (midTime === t) return mid;
+        if (midTime < t) { lo = mid + 1; } else { hi = mid - 1; }
+      }
+      // hi is last index with time < t, lo is first index with time > t
+      const hiTime = minimapTimeline[hi] ? minimapTimeline[hi].time : -Infinity;
+      const loTime = minimapTimeline[lo] ? minimapTimeline[lo].time : Infinity;
+      return Math.abs(hiTime - t) <= Math.abs(loTime - t) ? hi : lo;
+    }
+
     // Sync minimap scrubber with video player
     videoPlayer.addEventListener('timeupdate', () => {
       if (activeTab !== 'minimap' || minimapTimeline.length === 0) return;
       const t = videoPlayer.currentTime;
-      // Find closest frame index
-      let best = 0;
-      let bestDist = Infinity;
-      for (let i = 0; i < minimapTimeline.length; i++) {
-        const d = Math.abs(minimapTimeline[i].time - t);
-        if (d < bestDist) { bestDist = d; best = i; }
-      }
+      const best = findClosestMinimapIndex(t);
       if (best !== minimapFrameIndex) {
         minimapFrameIndex = best;
         minimapScrubber.value = best;

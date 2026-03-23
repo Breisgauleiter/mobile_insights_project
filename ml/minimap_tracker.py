@@ -64,11 +64,15 @@ def _get_minimap_region(
     """
     if config is not None:
         size = int(min(frame_width, frame_height) * _DEFAULT_MINIMAP_FRACTION)
+        x = config.get("x")
+        y = config.get("y")
+        w = config.get("width")
+        h = config.get("height")
         return (
-            int(config.get("x", 0)),
-            int(config.get("y", frame_height - size)),
-            int(config.get("width", size)),
-            int(config.get("height", size)),
+            int(x) if x is not None else 0,
+            int(y) if y is not None else frame_height - size,
+            int(w) if w is not None else size,
+            int(h) if h is not None else size,
         )
     size = int(min(frame_width, frame_height) * _DEFAULT_MINIMAP_FRACTION)
     return 0, frame_height - size, size, size
@@ -336,10 +340,10 @@ def main() -> None:
         for v in [args.minimap_x, args.minimap_y, args.minimap_width, args.minimap_height]
     ):
         config = {
-            "x": args.minimap_x or 0,
-            "y": args.minimap_y or 0,
-            "width": args.minimap_width or 200,
-            "height": args.minimap_height or 200,
+            "x": args.minimap_x,
+            "y": args.minimap_y,
+            "width": args.minimap_width,
+            "height": args.minimap_height,
         }
 
     try:
