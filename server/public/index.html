@@ -240,6 +240,134 @@
     .icon-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
     .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+    /* Result tabs */
+    .result-tabs {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 14px;
+      border-bottom: 2px solid #1e1e3a;
+    }
+
+    .result-tab {
+      background: none;
+      border: none;
+      color: #a0a0c0;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 14px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .result-tab:hover { color: #fff; }
+    .result-tab.active { color: #6c5ce7; border-bottom-color: #6c5ce7; }
+
+    /* Minimap canvas container */
+    .minimap-canvas-wrap {
+      position: relative;
+      width: 200px;
+      height: 200px;
+      background: #0f0f23;
+      border-radius: 8px;
+      border: 1px solid #2a2a4a;
+      margin: 0 auto 16px;
+      overflow: hidden;
+    }
+
+    #minimapCanvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+    }
+
+    .minimap-legend {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      font-size: 12px;
+      color: #a0a0c0;
+      margin-bottom: 12px;
+    }
+
+    .minimap-legend span {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .minimap-legend .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .minimap-legend .dot.ally { background: #4488ff; }
+    .minimap-legend .dot.enemy { background: #ff4444; }
+
+    .minimap-scrubber {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding: 0 8px;
+    }
+
+    .minimap-scrubber input[type="range"] {
+      flex: 1;
+      accent-color: #6c5ce7;
+    }
+
+    .minimap-scrubber .time-label {
+      font-size: 12px;
+      color: #a0a0c0;
+      min-width: 40px;
+      text-align: right;
+    }
+
+    .minimap-events {
+      list-style: none;
+    }
+
+    .minimap-events li {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      background: #0f0f23;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+
+    .minimap-events .ev-time {
+      font-weight: 700;
+      color: #6c5ce7;
+      min-width: 48px;
+    }
+
+    .minimap-events .ev-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+      text-transform: uppercase;
+    }
+
+    .minimap-events .ev-badge.gank { background: #e74c3c33; color: #ff6b6b; }
+    .minimap-events .ev-badge.rotation { background: #f39c1233; color: #fdcb6e; }
+
+    .minimap-events .ev-desc { color: #a0a0c0; flex: 1; }
+
+    .minimap-status {
+      text-align: center;
+      color: #636e72;
+      padding: 24px;
+      font-size: 13px;
+    }
+
     .highlight-card {
       display: flex;
       align-items: center;
@@ -488,6 +616,16 @@
         <button class="close-btn" id="closeResults">&times;</button>
       </div>
       <h3 id="resultsTitle">Results</h3>
+      <!-- Tab bar -->
+      <div
+        class="result-tabs"
+        id="resultTabs"
+        role="tablist"
+        aria-label="Result views"
+      >
+        <button class="result-tab active" data-tab="highlights" aria-label="Highlights tab" role="tab" aria-selected="true" tabindex="0">&#x1F3AF; Highlights</button>
+        <button class="result-tab" data-tab="minimap" aria-label="Minimap tab" role="tab" aria-selected="false" tabindex="-1">&#x1F5FA;&#xFE0F; Minimap</button>
+      </div>
       <div id="videoAnnotationSection" style="display:none">
         <div id="annotationToolbar" class="annotation-toolbar">
           <button id="drawToggleBtn" class="ann-btn" title="Toggle annotation mode">&#x1F58A;&#xFE0F; Annotate</button>
@@ -525,6 +663,22 @@
         </div>
       </div>
       <div id="resultsContent"></div>
+      <!-- Minimap tab content -->
+      <div id="minimapContent" style="display:none">
+        <div class="minimap-canvas-wrap">
+          <canvas id="minimapCanvas" width="200" height="200"></canvas>
+        </div>
+        <div class="minimap-legend">
+          <span><span class="dot ally"></span> Ally</span>
+          <span><span class="dot enemy"></span> Enemy</span>
+        </div>
+        <div class="minimap-scrubber">
+          <span style="font-size:12px;color:#a0a0c0">0:00</span>
+          <input type="range" id="minimapScrubber" min="0" max="100" value="0" style="flex:1">
+          <span class="time-label" id="minimapTimeLabel">0:00</span>
+        </div>
+        <ul class="minimap-events" id="minimapEventsList"></ul>
+      </div>
     </div>
 
     <!-- Uploads list -->
@@ -544,16 +698,68 @@
     const resultsPanel = document.getElementById('resultsPanel');
     const resultsTitle = document.getElementById('resultsTitle');
     const resultsContent = document.getElementById('resultsContent');
+    const minimapContent = document.getElementById('minimapContent');
     const closeResults = document.getElementById('closeResults');
     const reprocessBtn = document.getElementById('reprocessBtn');
     const videoAnnotationSection = document.getElementById('videoAnnotationSection');
     const videoWrap = document.getElementById('videoWrap');
     const videoPlayer = document.getElementById('videoPlayer');
     const exportAllBtn = document.getElementById('exportAllBtn');
+    const minimapCanvas = document.getElementById('minimapCanvas');
+    const minimapCtx = minimapCanvas.getContext('2d');
+    const minimapScrubber = document.getElementById('minimapScrubber');
+    const minimapTimeLabel = document.getElementById('minimapTimeLabel');
+    const minimapEventsList = document.getElementById('minimapEventsList');
 
     let pollTimer = null;
     let currentVideoId = null;
     let currentResultsId = null;
+    let activeTab = 'highlights';
+
+    // Minimap state
+    let minimapTimeline = [];
+    let minimapEvents = [];
+    let minimapFrameIndex = 0;
+
+    // Tab switching — click handler + aria-selected state management
+    document.querySelectorAll('.result-tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        activeTab = tab.getAttribute('data-tab');
+        document.querySelectorAll('.result-tab').forEach((t) => {
+          const isActive = t === tab;
+          t.classList.toggle('active', isActive);
+          t.setAttribute('aria-selected', isActive ? 'true' : 'false');
+          t.setAttribute('tabindex', isActive ? '0' : '-1');
+        });
+        if (activeTab === 'highlights') {
+          resultsContent.style.display = '';
+          minimapContent.style.display = 'none';
+        } else {
+          resultsContent.style.display = 'none';
+          minimapContent.style.display = '';
+          // Only fetch if minimap data hasn't been loaded yet for this video
+          if (currentResultsId && minimapTimeline.length === 0) {
+            loadMinimap(currentResultsId);
+          }
+        }
+      });
+    });
+
+    // Keyboard arrow navigation for the tab bar
+    document.getElementById('resultTabs').addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return;
+      const tabs = Array.from(document.querySelectorAll('#resultTabs [role="tab"]'));
+      const currentIdx = tabs.indexOf(document.activeElement);
+      if (currentIdx === -1) return;
+      let newIdx = currentIdx;
+      if (e.key === 'ArrowRight') { newIdx = (currentIdx + 1) % tabs.length; }
+      else if (e.key === 'ArrowLeft') { newIdx = (currentIdx - 1 + tabs.length) % tabs.length; }
+      else if (e.key === 'Home') { newIdx = 0; }
+      else if (e.key === 'End') { newIdx = tabs.length - 1; }
+      e.preventDefault();
+      tabs[newIdx].focus();
+      tabs[newIdx].click();
+    });
 
     // Drag & drop
     uploadZone.addEventListener('click', () => fileInput.click());
@@ -758,6 +964,21 @@
       reprocessBtn.disabled = true;
       exportAllBtn.disabled = true;
 
+      // Reset to Highlights tab when switching to a new video
+      if (currentVideoId !== id) {
+        activeTab = 'highlights';
+        document.querySelectorAll('.result-tab').forEach((t) => {
+          const isHighlights = t.getAttribute('data-tab') === 'highlights';
+          t.classList.toggle('active', isHighlights);
+          t.setAttribute('aria-selected', isHighlights ? 'true' : 'false');
+          t.setAttribute('tabindex', isHighlights ? '0' : '-1');
+        });
+        resultsContent.style.display = '';
+        minimapContent.style.display = 'none';
+        minimapTimeline = [];
+        minimapEvents = [];
+      }
+
       // Load video player
       if (currentVideoId !== id) {
         currentVideoId = id;
@@ -878,6 +1099,17 @@
       currentResultsId = null;
       reprocessBtn.disabled = true;
       exportAllBtn.disabled = true;
+      activeTab = 'highlights';
+      document.querySelectorAll('.result-tab').forEach((t) => {
+        const isHighlights = t.getAttribute('data-tab') === 'highlights';
+        t.classList.toggle('active', isHighlights);
+        t.setAttribute('aria-selected', isHighlights ? 'true' : 'false');
+        t.setAttribute('tabindex', isHighlights ? '0' : '-1');
+      });
+      resultsContent.style.display = '';
+      minimapContent.style.display = 'none';
+      minimapTimeline = [];
+      minimapEvents = [];
       disableAnnotationMode();
     });
 
@@ -919,8 +1151,157 @@
     }
 
     // =====================
-    // ANNOTATION OVERLAY
+    // MINIMAP VISUALIZATION
     // =====================
+
+    async function loadMinimap(id) {
+      if (!id) return;
+      minimapEventsList.innerHTML = '<li class="minimap-status">Analyzing minimap...</li>';
+      minimapCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+
+      try {
+        const res = await fetch('/minimap-analysis', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: id }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          minimapEventsList.innerHTML =
+            `<li class="minimap-status">&#9888; ${esc(data.error || 'Minimap analysis failed')}</li>`;
+          return;
+        }
+
+        const data = await res.json();
+        minimapTimeline = Array.isArray(data.timeline) ? data.timeline : [];
+        minimapEvents = Array.isArray(data.events) ? data.events : [];
+
+        if (minimapTimeline.length === 0) {
+          minimapCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+          minimapEventsList.innerHTML =
+            '<li class="minimap-status">No hero positions detected in minimap</li>';
+          return;
+        }
+
+        // Configure scrubber
+        minimapFrameIndex = 0;
+        minimapScrubber.min = 0;
+        minimapScrubber.max = minimapTimeline.length - 1;
+        minimapScrubber.value = 0;
+        minimapTimeLabel.textContent = formatTime(minimapTimeline[0].time);
+
+        drawMinimapFrame(0);
+        renderMinimapEvents();
+      } catch {
+        minimapEventsList.innerHTML =
+          '<li class="minimap-status">Failed to load minimap data</li>';
+      }
+    }
+
+    function drawMinimapFrame(frameIdx) {
+      const W = minimapCanvas.width;
+      const H = minimapCanvas.height;
+      minimapCtx.clearRect(0, 0, W, H);
+
+      // Draw grid
+      minimapCtx.strokeStyle = 'rgba(255,255,255,0.06)';
+      minimapCtx.lineWidth = 1;
+      for (let i = 1; i < 4; i++) {
+        minimapCtx.beginPath();
+        minimapCtx.moveTo(i * W / 4, 0);
+        minimapCtx.lineTo(i * W / 4, H);
+        minimapCtx.stroke();
+        minimapCtx.beginPath();
+        minimapCtx.moveTo(0, i * H / 4);
+        minimapCtx.lineTo(W, i * H / 4);
+        minimapCtx.stroke();
+      }
+
+      // Draw diagonal (territory boundary hint)
+      minimapCtx.strokeStyle = 'rgba(255,255,255,0.08)';
+      minimapCtx.beginPath();
+      minimapCtx.moveTo(0, 0);
+      minimapCtx.lineTo(W, H);
+      minimapCtx.stroke();
+
+      const entry = minimapTimeline[frameIdx];
+      if (!entry) return;
+
+      for (const pos of entry.positions) {
+        const px = pos.x * W;
+        const py = pos.y * H;
+        minimapCtx.beginPath();
+        minimapCtx.arc(px, py, 5, 0, Math.PI * 2);
+        minimapCtx.fillStyle = pos.team === 'ally' ? '#4488ff' : '#ff4444';
+        minimapCtx.fill();
+        minimapCtx.strokeStyle = '#fff';
+        minimapCtx.lineWidth = 1;
+        minimapCtx.stroke();
+      }
+    }
+
+    function renderMinimapEvents() {
+      if (minimapEvents.length === 0) {
+        minimapEventsList.innerHTML =
+          '<li class="minimap-status">No gank or rotation events detected</li>';
+        return;
+      }
+      minimapEventsList.innerHTML = minimapEvents
+        .map((ev) => `
+          <li>
+            <span class="ev-time">${formatTime(ev.time)}</span>
+            <span class="ev-badge ${esc(ev.type)}">${esc(ev.type)}</span>
+            <span class="ev-desc">${esc(ev.description)}</span>
+          </li>
+        `)
+        .join('');
+    }
+
+    minimapScrubber.addEventListener('input', () => {
+      const idx = parseInt(minimapScrubber.value, 10);
+      if (minimapTimeline.length === 0) return;
+      minimapFrameIndex = idx;
+      const entry = minimapTimeline[idx];
+      if (entry) {
+        minimapTimeLabel.textContent = formatTime(entry.time);
+        videoPlayer.currentTime = entry.time;
+      }
+      drawMinimapFrame(idx);
+    });
+
+    // Binary search: find closest minimap frame index for a given time value
+    function findClosestMinimapIndex(t) {
+      const len = minimapTimeline.length;
+      if (len === 0) return 0;
+      if (t <= minimapTimeline[0].time) return 0;
+      if (t >= minimapTimeline[len - 1].time) return len - 1;
+      let lo = 0;
+      let hi = len - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >>> 1;
+        const midTime = minimapTimeline[mid].time;
+        if (midTime === t) return mid;
+        if (midTime < t) { lo = mid + 1; } else { hi = mid - 1; }
+      }
+      // hi is last index with time < t, lo is first index with time > t
+      const hiTime = minimapTimeline[hi] ? minimapTimeline[hi].time : -Infinity;
+      const loTime = minimapTimeline[lo] ? minimapTimeline[lo].time : Infinity;
+      return Math.abs(hiTime - t) <= Math.abs(loTime - t) ? hi : lo;
+    }
+
+    // Sync minimap scrubber with video player
+    videoPlayer.addEventListener('timeupdate', () => {
+      if (activeTab !== 'minimap' || minimapTimeline.length === 0) return;
+      const t = videoPlayer.currentTime;
+      const best = findClosestMinimapIndex(t);
+      if (best !== minimapFrameIndex) {
+        minimapFrameIndex = best;
+        minimapScrubber.value = best;
+        minimapTimeLabel.textContent = formatTime(minimapTimeline[best].time);
+        drawMinimapFrame(best);
+      }
+    });
 
     const annotationCanvas = document.getElementById('annotationCanvas');
     const annotationCtx = annotationCanvas.getContext('2d');

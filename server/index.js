@@ -36,8 +36,9 @@ function restoreJobs() {
   }
 }
 
-// Path to the ML script
+// Path to the ML scripts
 const ML_SCRIPT = path.resolve(__dirname, '..', 'ml', 'highlight_detector.py');
+const MINIMAP_SCRIPT = path.resolve(__dirname, '..', 'ml', 'minimap_tracker.py');
 const TRACKER_SCRIPT = path.resolve(__dirname, '..', 'ml', 'object_tracker.py');
 const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
 
@@ -255,6 +256,16 @@ app._tracksDir = tracksDir;
 app._deleteClipsForVideo = deleteClipsForVideo;
 app._deleteTracksForVideo = deleteTracksForVideo;
 app._getTrackCachePath = getTrackCachePath;
+app._minimapScript = MINIMAP_SCRIPT;
+
+// Rate limiter for minimap analysis (spawns a Python subprocess)
+const minimapRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many minimap analysis requests, please try again later.' },
+});
 
 // Track an object in a video using OpenCV CSRT
 app.post('/track', trackRateLimit, async (req, res) => {
@@ -345,6 +356,7 @@ app.post('/track', trackRateLimit, async (req, res) => {
       resolve(res.status(500).json({ error: `Tracker spawn error: ${err.message}` }));
     });
   });
+});
 });
 
 // List uploaded videos with processing status
@@ -466,6 +478,11 @@ app.delete('/uploads/:filename', (req, res) => {
     fs.unlinkSync(resultPath);
   }
 
+  const minimapCacheFile = path.join(uploadDir, filename + '.minimap.json');
+  if (fs.existsSync(minimapCacheFile)) {
+    try { fs.unlinkSync(minimapCacheFile); } catch { /* ignore */ }
+  }
+
   deleteClipsForVideo(filename);
   deleteTracksForVideo(filename);
   jobs.delete(filename);
@@ -494,6 +511,67 @@ app.post('/reprocess/:filename', (req, res) => {
   runMLPipeline(filename, videoPath, resultPath);
 
   return res.status(202).json({ message: 'Reprocessing started' });
+});
+
+/**
+ * Run the minimap tracker Python script for a video and return the results.
+ * Results are cached as <filename>.minimap.json in the uploads directory.
+ *
+ * POST /minimap-analysis
+ * Body: { filename: string }
+ * Response: { timeline, events, minimap_region }
+ */
+app.post('/minimap-analysis', minimapRateLimit, (req, res) => {
+  const { filename } = req.body || {};
+  if (!filename || typeof filename !== 'string') {
+    return res.status(400).json({ error: 'filename is required' });
+  }
+
+  const safeFilename = path.basename(filename);
+  const videoPath = path.join(uploadDir, safeFilename);
+
+  if (!fs.existsSync(videoPath) || safeFilename.endsWith('.json')) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+
+  const cacheFile = path.join(uploadDir, safeFilename + '.minimap.json');
+
+  // Return cached result if available
+  if (fs.existsSync(cacheFile)) {
+    try {
+      const raw = fs.readFileSync(cacheFile, 'utf-8');
+      return res.json(JSON.parse(raw));
+    } catch {
+      // Cache corrupt — fall through to regenerate
+    }
+  }
+
+  const child = spawn(PYTHON_BIN, [MINIMAP_SCRIPT, '--video', videoPath], { stdio: 'pipe' });
+  let stdout = '';
+  let stderr = '';
+
+  child.stdout.on('data', (d) => { stdout += d.toString(); });
+  child.stderr.on('data', (d) => { stderr += d.toString(); });
+
+  child.on('close', (code) => {
+    if (code !== 0) {
+      res.status(500).json({
+        error: stderr.trim() || `Minimap analysis failed with exit code ${code}`,
+      });
+      return;
+    }
+    try {
+      const result = JSON.parse(stdout);
+      try { fs.writeFileSync(cacheFile, JSON.stringify(result)); } catch { /* ignore cache write errors */ }
+      res.json(result);
+    } catch {
+      res.status(500).json({ error: 'Failed to parse minimap results' });
+    }
+  });
+
+  child.on('error', (err) => {
+    res.status(500).json({ error: err.message });
+  });
 });
 
 /**
