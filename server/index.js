@@ -268,12 +268,12 @@ app.post('/track', trackRateLimit, async (req, res) => {
   }
   if (
     !bbox ||
-    typeof bbox.x !== 'number' ||
-    typeof bbox.y !== 'number' ||
-    typeof bbox.w !== 'number' ||
-    typeof bbox.h !== 'number'
+    !Number.isFinite(bbox.x) ||
+    !Number.isFinite(bbox.y) ||
+    !Number.isFinite(bbox.w) ||
+    !Number.isFinite(bbox.h)
   ) {
-    return res.status(400).json({ error: 'bbox must have numeric x, y, w, h' });
+    return res.status(400).json({ error: 'bbox must have finite numeric x, y, w, h' });
   }
   if (bbox.w <= 0 || bbox.h <= 0) {
     return res.status(400).json({ error: 'bbox w and h must be positive' });
@@ -319,9 +319,17 @@ app.post('/track', trackRateLimit, async (req, res) => {
 
     child.on('close', (code) => {
       if (code !== 0) {
-        // Redact the video path from error output to avoid leaking filesystem details
-        const errMsg = stderr.trim().replace(videoPath, '<video>') || `Tracker process exited with code ${code}`;
-        resolve(res.status(500).json({ error: `Tracker failed: ${errMsg}` }));
+        // Log full stderr server-side; return a generic message to the client
+        const MAX_LOG = 2000;
+        let logMsg = stderr.trim()
+          .replaceAll(videoPath, '<video>')
+          .replaceAll(String(TRACKER_SCRIPT), '<tracker_script>')
+          .replaceAll(__dirname, '<server_dir>');
+        if (logMsg.length > MAX_LOG) {
+          logMsg = logMsg.slice(0, MAX_LOG) + '…[truncated]';
+        }
+        console.error('Tracker process failed:', logMsg || `exited with code ${code}`);
+        resolve(res.status(500).json({ error: 'Tracker failed' }));
         return;
       }
       try {

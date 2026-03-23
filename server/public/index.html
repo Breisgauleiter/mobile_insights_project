@@ -960,6 +960,7 @@
       ann.drawing = false;
       ann.enabled = false;
       tracked.positions = [];
+      tracked.inFlight = false;
       annotationCanvas.classList.remove('drawing-on');
       annotationToolbar.classList.remove('drawing-on');
       drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Annotate';
@@ -976,6 +977,7 @@
       ann.drawing = false;
       ann.enabled = false;
       tracked.positions = [];
+      tracked.inFlight = false;
       annotationCanvas.classList.remove('drawing-on');
       annotationToolbar.classList.remove('drawing-on');
       drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Annotate';
@@ -1249,12 +1251,16 @@
       positions: [],  // [{time, x, y, w, h}] in video pixel coordinates
       color: '#ff3333',
       lineWidth: 2,
+      inFlight: false,  // true while a /track request is pending
     };
 
     const trackStatusEl = document.getElementById('trackStatus');
+    const trackToolBtn = document.querySelector('.ann-tool-btn[data-tool="track"]');
 
     function setTrackStatus(visible) {
       trackStatusEl.classList.toggle('visible', visible);
+      // Disable the Track button while a request is in flight to prevent concurrent requests
+      if (trackToolBtn) trackToolBtn.disabled = visible;
     }
 
     /**
@@ -1345,6 +1351,7 @@
     /** Send a track request to the server and store results. */
     async function startTracking(shape) {
       if (!currentVideoId) return;
+      if (tracked.inFlight) return;  // prevent concurrent requests
 
       const bbox = canvasRectToVideoBbox(shape.points[0], shape.points[1]);
       if (!bbox || bbox.w <= 0 || bbox.h <= 0) {
@@ -1356,6 +1363,7 @@
       tracked.positions = [];
       tracked.color = shape.color;
       tracked.lineWidth = shape.lineWidth;
+      tracked.inFlight = true;
       setTrackStatus(true);
 
       try {
@@ -1379,6 +1387,7 @@
       } catch (err) {
         alert('Tracking request failed: ' + err.message);
       } finally {
+        tracked.inFlight = false;
         setTrackStatus(false);
       }
     }

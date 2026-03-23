@@ -28,9 +28,11 @@ def _create_csrt_tracker() -> Any:
         return cv2.TrackerCSRT_create()
     if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerCSRT_create"):
         return cv2.legacy.TrackerCSRT_create()
+    opencv_version = getattr(cv2, "__version__", "unknown")
     raise RuntimeError(
         "OpenCV CSRT tracker is not available in this build. "
-        "Install opencv-contrib-python or opencv-python >= 4.5."
+        "Install an OpenCV build with contrib modules (e.g. 'opencv-contrib-python'). "
+        f"Detected OpenCV version: {opencv_version}."
     )
 
 
@@ -58,8 +60,15 @@ def track_object(
 
     Raises:
         FileNotFoundError: If the video file does not exist.
-        RuntimeError: If the video cannot be opened or the start frame cannot be read.
+        RuntimeError: If the video cannot be opened, the start frame cannot be read,
+            or tracker initialization fails.
+        ValueError: If fps or duration are not positive.
     """
+    if fps <= 0:
+        raise ValueError(f"fps must be positive, got {fps}")
+    if duration <= 0:
+        raise ValueError(f"duration must be positive, got {duration}")
+
     if not Path(video_path).exists():
         raise FileNotFoundError(f"Video file not found: {video_path}")
 
@@ -68,58 +77,63 @@ def track_object(
         cap.release()
         raise RuntimeError(f"Could not open video: {video_path}")
 
-    video_fps = cap.get(cv2.CAP_PROP_FPS)
-    if video_fps <= 0:
+    try:
+        video_fps = cap.get(cv2.CAP_PROP_FPS)
+        if video_fps <= 0:
+            raise RuntimeError("Video has invalid FPS")
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        start_frame = int(start_time * video_fps)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+        ret, init_frame = cap.read()
+        if not ret:
+            raise RuntimeError(f"Could not read frame at t={start_time:.3f}s")
+
+        tracker = _create_csrt_tracker()
+        x, y, w, h = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+        if not tracker.init(init_frame, (x, y, w, h)):
+            raise RuntimeError(
+                "Tracker initialization failed. "
+                "The bounding box may be outside the frame boundaries."
+            )
+
+        positions: list[dict] = [
+            {"time": round(start_time, 3), "x": x, "y": y, "w": w, "h": h}
+        ]
+
+        end_frame = start_frame + int(duration * video_fps)
+        if total_frames > 0:
+            end_frame = min(end_frame, total_frames - 1)
+
+        # Interval between recorded positions (in video frames)
+        record_interval = video_fps / fps
+        next_record_at = start_frame + record_interval
+        current_frame = start_frame + 1
+
+        while True:
+            ret, frame = cap.read()
+            if not ret or current_frame > end_frame:
+                break
+
+            ok, new_bbox = tracker.update(frame)
+            if not ok:
+                break
+
+            if current_frame >= next_record_at:
+                bx = int(new_bbox[0])
+                by = int(new_bbox[1])
+                bw = int(new_bbox[2])
+                bh = int(new_bbox[3])
+                t = round(current_frame / video_fps, 3)
+                positions.append({"time": t, "x": bx, "y": by, "w": bw, "h": bh})
+                next_record_at += record_interval
+
+            current_frame += 1
+
+    finally:
         cap.release()
-        raise RuntimeError("Video has invalid FPS")
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    start_frame = int(start_time * video_fps)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-    ret, init_frame = cap.read()
-    if not ret:
-        cap.release()
-        raise RuntimeError(f"Could not read frame at t={start_time:.3f}s")
-
-    tracker = _create_csrt_tracker()
-    x, y, w, h = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-    tracker.init(init_frame, (x, y, w, h))
-
-    positions: list[dict] = [
-        {"time": round(start_time, 3), "x": x, "y": y, "w": w, "h": h}
-    ]
-
-    end_frame = start_frame + int(duration * video_fps)
-    if total_frames > 0:
-        end_frame = min(end_frame, total_frames - 1)
-
-    # Interval between recorded positions (in video frames)
-    record_interval = video_fps / fps
-    next_record_at = start_frame + record_interval
-    current_frame = start_frame + 1
-
-    while True:
-        ret, frame = cap.read()
-        if not ret or current_frame > end_frame:
-            break
-
-        ok, new_bbox = tracker.update(frame)
-        if not ok:
-            break
-
-        if current_frame >= next_record_at:
-            bx = int(new_bbox[0])
-            by = int(new_bbox[1])
-            bw = int(new_bbox[2])
-            bh = int(new_bbox[3])
-            t = round(current_frame / video_fps, 3)
-            positions.append({"time": t, "x": bx, "y": by, "w": bw, "h": bh})
-            next_record_at += record_interval
-
-        current_frame += 1
-
-    cap.release()
     return positions
 
 
@@ -163,6 +177,14 @@ def main() -> None:
         print("Error: start time must be non-negative", file=sys.stderr)
         sys.exit(1)
 
+    if args.fps <= 0:
+        print("Error: --fps must be positive", file=sys.stderr)
+        sys.exit(1)
+
+    if args.duration <= 0:
+        print("Error: --duration must be positive", file=sys.stderr)
+        sys.exit(1)
+
     try:
         positions = track_object(
             args.video,
@@ -172,7 +194,7 @@ def main() -> None:
             fps=args.fps,
         )
         print(json.dumps(positions))
-    except (FileNotFoundError, RuntimeError) as exc:
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
