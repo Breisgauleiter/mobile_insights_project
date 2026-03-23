@@ -363,7 +363,6 @@ app.post('/track', trackRateLimit, async (req, res) => {
     });
   });
 });
-});
 
 // List uploaded videos with processing status
 app.get('/uploads', (req, res) => {
