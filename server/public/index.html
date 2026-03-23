@@ -419,6 +419,14 @@
       pointer-events: auto;
     }
 
+    #annotationCanvas.drawing-on.tool-hand {
+      cursor: grab;
+    }
+
+    #annotationCanvas.drawing-on.tool-hand.grabbing {
+      cursor: grabbing;
+    }
+
     .highlight-card:hover {
       background: #1a1a2e;
     }
@@ -454,8 +462,9 @@
       <h3 id="resultsTitle">Results</h3>
       <div id="videoAnnotationSection" style="display:none">
         <div id="annotationToolbar" class="annotation-toolbar">
-          <button id="drawToggleBtn" class="ann-btn" title="Toggle drawing mode">&#x1F58A;&#xFE0F; Draw</button>
+          <button id="drawToggleBtn" class="ann-btn" title="Toggle annotation mode">&#x1F58A;&#xFE0F; Annotate</button>
           <div class="ann-separator"></div>
+          <button class="ann-btn ann-tool-btn" data-tool="hand" title="Move shapes">&#x270B;</button>
           <button class="ann-btn ann-tool-btn active" data-tool="freehand" title="Freehand pen">&#x270F;&#xFE0F;</button>
           <button class="ann-btn ann-tool-btn" data-tool="arrow" title="Arrow">&#x27A1;&#xFE0F;</button>
           <button class="ann-btn ann-tool-btn" data-tool="circle" title="Circle">&#x2B55;</button>
@@ -896,6 +905,9 @@
       currentShape: null,
       drawing: false,
       enabled: false,
+      // Hand tool state
+      dragIndex: -1,
+      dragOffset: null,
     };
 
     function syncCanvasSize() {
@@ -916,7 +928,7 @@
       ann.enabled = false;
       annotationCanvas.classList.remove('drawing-on');
       annotationToolbar.classList.remove('drawing-on');
-      drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Draw';
+      drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Annotate';
       drawToggleBtn.classList.remove('active');
       annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
       canvasResizeObserver.observe(videoContainer);
@@ -931,7 +943,7 @@
       ann.enabled = false;
       annotationCanvas.classList.remove('drawing-on');
       annotationToolbar.classList.remove('drawing-on');
-      drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Draw';
+      drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Annotate';
       drawToggleBtn.classList.remove('active');
       annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
     }
@@ -941,21 +953,32 @@
       if (ann.enabled) {
         annotationCanvas.classList.add('drawing-on');
         annotationToolbar.classList.add('drawing-on');
-        drawToggleBtn.textContent = '\u270B Move';
+        drawToggleBtn.textContent = '\u274C Stop';
         drawToggleBtn.classList.add('active');
+        updateCanvasCursor();
       } else {
         annotationCanvas.classList.remove('drawing-on');
         annotationToolbar.classList.remove('drawing-on');
-        drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Draw';
+        drawToggleBtn.textContent = '\uD83D\uDD8A\uFE0F Annotate';
         drawToggleBtn.classList.remove('active');
+        annotationCanvas.classList.remove('tool-hand', 'grabbing');
       }
     });
+
+    function updateCanvasCursor() {
+      if (ann.tool === 'hand') {
+        annotationCanvas.classList.add('tool-hand');
+      } else {
+        annotationCanvas.classList.remove('tool-hand', 'grabbing');
+      }
+    }
 
     document.querySelectorAll('.ann-tool-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         ann.tool = btn.getAttribute('data-tool');
         document.querySelectorAll('.ann-tool-btn').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
+        updateCanvasCursor();
       });
     });
 
@@ -1002,10 +1025,81 @@
       };
     }
 
+    // Hit-test: find topmost shape at a point
+    function hitTestShape(pt, shape) {
+      const tol = Math.max(12, shape.lineWidth * 2);
+      switch (shape.type) {
+        case 'freehand':
+          for (const p of shape.points) {
+            if (Math.hypot(p.x - pt.x, p.y - pt.y) < tol) return true;
+          }
+          return false;
+        case 'arrow': {
+          if (shape.points.length < 2) return false;
+          const [a, b] = shape.points;
+          return distToSegment(pt, a, b) < tol;
+        }
+        case 'circle': {
+          if (shape.points.length < 2) return false;
+          const [c, ep] = shape.points;
+          const r = Math.hypot(ep.x - c.x, ep.y - c.y);
+          return Math.abs(Math.hypot(pt.x - c.x, pt.y - c.y) - r) < tol;
+        }
+        case 'rect': {
+          if (shape.points.length < 2) return false;
+          const [p1, p2] = shape.points;
+          const minX = Math.min(p1.x, p2.x), maxX = Math.max(p1.x, p2.x);
+          const minY = Math.min(p1.y, p2.y), maxY = Math.max(p1.y, p2.y);
+          // Check if near any of the 4 edges
+          if (pt.x >= minX - tol && pt.x <= maxX + tol && pt.y >= minY - tol && pt.y <= maxY + tol) {
+            return (pt.x < minX + tol || pt.x > maxX - tol || pt.y < minY + tol || pt.y > maxY - tol);
+          }
+          return false;
+        }
+        case 'text': {
+          const fontSize = shape.lineWidth * 5 + 10;
+          const tw = shape.text.length * fontSize * 0.6;
+          return Math.abs(pt.x - shape.points[0].x - tw / 2) < tw / 2 + tol &&
+                 Math.abs(pt.y - shape.points[0].y + fontSize / 3) < fontSize / 2 + tol;
+        }
+      }
+      return false;
+    }
+
+    function distToSegment(p, a, b) {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+      let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+    }
+
+    function getShapeCenter(shape) {
+      if (shape.points.length === 0) return { x: 0, y: 0 };
+      let sx = 0, sy = 0;
+      for (const p of shape.points) { sx += p.x; sy += p.y; }
+      return { x: sx / shape.points.length, y: sy / shape.points.length };
+    }
+
     function onDrawStart(e) {
       if (!ann.enabled) return;
       e.preventDefault();
       const pt = getPoint(e);
+
+      // Hand tool: find and start dragging a shape
+      if (ann.tool === 'hand') {
+        for (let i = ann.shapes.length - 1; i >= 0; i--) {
+          if (hitTestShape(pt, ann.shapes[i])) {
+            ann.dragIndex = i;
+            const c = getShapeCenter(ann.shapes[i]);
+            ann.dragOffset = { x: pt.x - c.x, y: pt.y - c.y };
+            annotationCanvas.classList.add('grabbing');
+            return;
+          }
+        }
+        return;
+      }
 
       if (ann.tool === 'text') {
         const text = prompt('Enter annotation text:');
@@ -1032,7 +1126,25 @@
     }
 
     function onDrawMove(e) {
-      if (!ann.enabled || !ann.drawing || !ann.currentShape) return;
+      if (!ann.enabled) return;
+
+      // Hand tool drag
+      if (ann.tool === 'hand' && ann.dragIndex >= 0) {
+        e.preventDefault();
+        const pt = getPoint(e);
+        const shape = ann.shapes[ann.dragIndex];
+        const c = getShapeCenter(shape);
+        const dx = pt.x - ann.dragOffset.x - c.x;
+        const dy = pt.y - ann.dragOffset.y - c.y;
+        for (const p of shape.points) {
+          p.x += dx;
+          p.y += dy;
+        }
+        redrawAll();
+        return;
+      }
+
+      if (!ann.drawing || !ann.currentShape) return;
       e.preventDefault();
       const pt = getPoint(e);
       if (ann.currentShape.type === 'freehand') {
@@ -1048,6 +1160,14 @@
     }
 
     function onDrawEnd(e) {
+      // Hand tool: stop dragging
+      if (ann.tool === 'hand' && ann.dragIndex >= 0) {
+        ann.dragIndex = -1;
+        ann.dragOffset = null;
+        annotationCanvas.classList.remove('grabbing');
+        return;
+      }
+
       if (!ann.enabled || !ann.drawing || !ann.currentShape) return;
       if (e.cancelable) e.preventDefault();
       const minPoints = ann.currentShape.type === 'freehand' ? 1 : 2;
