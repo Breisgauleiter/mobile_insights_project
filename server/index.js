@@ -8,6 +8,7 @@ const archiver = require('archiver');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
+app.set('trust proxy', 1);
 const port = process.env.PORT || 3000;
 
 // In-memory store for job status and results (keyed by filename)

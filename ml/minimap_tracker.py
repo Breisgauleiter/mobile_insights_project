@@ -29,8 +29,19 @@ _ENEMY_HSV_LOWER2 = np.array([165, 120, 120]) # Red (enemy) — upper hue wrap
 _ENEMY_HSV_UPPER2 = np.array([180, 255, 255])
 
 # Contour area thresholds (pixels on the cropped minimap)
-_MIN_DOT_AREA = 5
-_MAX_DOT_AREA = 1000
+# Hero dots are significantly larger than minion dots on the MLBB minimap.
+# Increase minimum to filter out minion/wave indicators.
+_MIN_HERO_AREA = 20
+_MAX_HERO_AREA = 1000
+# Legacy compat
+_MIN_DOT_AREA = _MIN_HERO_AREA
+_MAX_DOT_AREA = _MAX_HERO_AREA
+
+# Maximum heroes per team (MLBB = 5v5)
+_MAX_HEROES_PER_TEAM = 5
+
+# Maximum normalized distance to match a dot to its previous-frame hero
+_MATCH_DISTANCE_THRESHOLD = 0.15
 
 # Gank detection: enemy dot appears in ally territory (bottom-left quadrant).
 # Normalized minimap coords: (0,0) = top-left, (1,1) = bottom-right.
@@ -83,8 +94,11 @@ def _find_dots(
     team: str,
     min_area: int,
     max_area: int,
-) -> list[tuple[float, float]]:
+) -> list[tuple[float, float, float]]:
     """Find hero dot centers for a given team using HSV masking.
+
+    Filters by contour area and returns at most the 5 largest dots
+    (hero icons are bigger than minion indicators on the MLBB minimap).
 
     Args:
         minimap_hsv: HSV image of the cropped minimap region.
@@ -93,8 +107,9 @@ def _find_dots(
         max_area: Maximum contour area in pixels to count as a dot.
 
     Returns:
-        List of (x, y) center positions normalized to [0, 1] relative to the
-        minimap region, where (0, 0) is the top-left corner.
+        List of (x, y, area) tuples. Positions are normalized to [0, 1]
+        relative to the minimap region.  Sorted by area descending,
+        limited to _MAX_HEROES_PER_TEAM entries.
     """
     h, w = minimap_hsv.shape[:2]
 
@@ -111,7 +126,7 @@ def _find_dots(
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    positions: list[tuple[float, float]] = []
+    candidates: list[tuple[float, float, float]] = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
         if min_area <= area <= max_area:
@@ -120,9 +135,70 @@ def _find_dots(
             if m00 > 0:
                 cx = round(M["m10"] / m00 / w, 3)
                 cy = round(M["m01"] / m00 / h, 3)
-                positions.append((cx, cy))
+                candidates.append((cx, cy, area))
 
-    return positions
+    # Sort by area descending and keep only the largest (hero-sized) dots
+    candidates.sort(key=lambda c: c[2], reverse=True)
+    return candidates[:_MAX_HEROES_PER_TEAM]
+
+
+def _assign_hero_ids(
+    current_dots: list[tuple[float, float, float]],
+    prev_positions: dict[int, tuple[float, float]],
+    next_id_counter: int,
+) -> tuple[list[tuple[float, float, int]], dict[int, tuple[float, float]], int]:
+    """Match current-frame dots to previous-frame hero IDs via nearest-neighbor.
+
+    Args:
+        current_dots: Detected (x, y, area) tuples for one team this frame.
+        prev_positions: Mapping hero_id → (x, y) from the previous frame.
+        next_id_counter: Next unused hero_id integer for this team.
+
+    Returns:
+        Tuple of:
+        - matched dots: [(x, y, hero_id), ...]
+        - updated positions dict for next frame
+        - updated next_id_counter
+    """
+    if not current_dots:
+        return [], {}, next_id_counter
+
+    # Build cost matrix and assign greedily (simple, fast, sufficient for 5 heroes)
+    used_prev_ids: set[int] = set()
+    assigned: list[tuple[float, float, int]] = []
+
+    dots_xy = [(d[0], d[1]) for d in current_dots]
+    remaining_dots = list(range(len(dots_xy)))
+
+    # First pass: match to known heroes from previous frame
+    if prev_positions:
+        # For each dot, find closest previous hero
+        matches: list[tuple[float, int, int]] = []  # (dist, dot_idx, hero_id)
+        for di, (dx, dy) in enumerate(dots_xy):
+            for hid, (px, py) in prev_positions.items():
+                dist = math.sqrt((dx - px) ** 2 + (dy - py) ** 2)
+                if dist < _MATCH_DISTANCE_THRESHOLD:
+                    matches.append((dist, di, hid))
+
+        matches.sort(key=lambda m: m[0])
+        used_dots: set[int] = set()
+        for dist, di, hid in matches:
+            if di in used_dots or hid in used_prev_ids:
+                continue
+            assigned.append((dots_xy[di][0], dots_xy[di][1], hid))
+            used_prev_ids.add(hid)
+            used_dots.add(di)
+        remaining_dots = [i for i in remaining_dots if i not in used_dots]
+
+    # Second pass: assign new IDs to unmatched dots
+    for di in remaining_dots:
+        assigned.append((dots_xy[di][0], dots_xy[di][1], next_id_counter))
+        next_id_counter += 1
+
+    # Build updated positions for next frame
+    new_positions = {hid: (x, y) for x, y, hid in assigned}
+
+    return assigned, new_positions, next_id_counter
 
 
 def _detect_events(timeline: list[dict]) -> list[dict]:
@@ -220,7 +296,11 @@ def track_minimap(
     Returns:
         Dict with:
             - 'timeline': list of {'time': float, 'positions': list of
-              {'x': float, 'y': float, 'team': str}} sorted by time.
+              {'x': float, 'y': float, 'team': str, 'hero_id': str}}
+              sorted by time.  hero_id is 'ally_0'..'ally_4' or
+              'enemy_0'..'enemy_4', tracked consistently across frames.
+            - 'heroes': {'ally': [id, ...], 'enemy': [id, ...]} — all
+              unique hero_id strings seen during the video.
             - 'events': list of {'time': float, 'type': str,
               'description': str} for detected ganks/rotations.
             - 'minimap_region': {'x': int, 'y': int, 'width': int,
@@ -259,6 +339,14 @@ def track_minimap(
     timeline: list[dict] = []
     frame_idx = 0
 
+    # Hero tracking state (persistent IDs across frames)
+    ally_prev: dict[int, tuple[float, float]] = {}
+    enemy_prev: dict[int, tuple[float, float]] = {}
+    ally_next_id = 0
+    enemy_next_id = 0
+    all_ally_ids: set[str] = set()
+    all_enemy_ids: set[str] = set()
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -274,13 +362,26 @@ def track_minimap(
 
             minimap_hsv = cv2.cvtColor(minimap, cv2.COLOR_BGR2HSV)
 
-            ally_pos = _find_dots(minimap_hsv, "ally", min_dot_area, max_dot_area)
-            enemy_pos = _find_dots(minimap_hsv, "enemy", min_dot_area, max_dot_area)
+            ally_dots = _find_dots(minimap_hsv, "ally", min_dot_area, max_dot_area)
+            enemy_dots = _find_dots(minimap_hsv, "enemy", min_dot_area, max_dot_area)
 
-            positions = (
-                [{"x": x, "y": y, "team": "ally"} for x, y in ally_pos]
-                + [{"x": x, "y": y, "team": "enemy"} for x, y in enemy_pos]
+            # Assign persistent hero IDs
+            ally_assigned, ally_prev, ally_next_id = _assign_hero_ids(
+                ally_dots, ally_prev, ally_next_id,
             )
+            enemy_assigned, enemy_prev, enemy_next_id = _assign_hero_ids(
+                enemy_dots, enemy_prev, enemy_next_id,
+            )
+
+            positions = []
+            for x, y, hid in ally_assigned:
+                hero_id = f"ally_{hid}"
+                all_ally_ids.add(hero_id)
+                positions.append({"x": x, "y": y, "team": "ally", "hero_id": hero_id})
+            for x, y, hid in enemy_assigned:
+                hero_id = f"enemy_{hid}"
+                all_enemy_ids.add(hero_id)
+                positions.append({"x": x, "y": y, "team": "enemy", "hero_id": hero_id})
 
             if positions:
                 timeline.append({"time": timestamp, "positions": positions})
@@ -293,6 +394,10 @@ def track_minimap(
 
     return {
         "timeline": timeline,
+        "heroes": {
+            "ally": sorted(all_ally_ids),
+            "enemy": sorted(all_enemy_ids),
+        },
         "events": events,
         "minimap_region": {"x": mm_x, "y": mm_y, "width": mm_w, "height": mm_h},
     }
