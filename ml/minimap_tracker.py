@@ -44,6 +44,37 @@ _RAPID_MOVE_THRESHOLD = 0.25
 # Minimum allowed sample_fps to avoid division-by-zero in frame-step calculation
 _MIN_SAMPLE_FPS = 0.1
 
+# Known MLBB turret positions on the minimap (normalized 0-1 coords).
+# (0,0) = top-left of the minimap; ally spawns bottom-left.
+_TURRET_POSITIONS: list[dict] = [
+    {"name": "ally_top_t1",  "team": "ally",  "x": 0.12, "y": 0.28},
+    {"name": "ally_top_t2",  "team": "ally",  "x": 0.20, "y": 0.18},
+    {"name": "ally_mid_t1",  "team": "ally",  "x": 0.28, "y": 0.45},
+    {"name": "ally_mid_t2",  "team": "ally",  "x": 0.38, "y": 0.35},
+    {"name": "ally_bot_t1",  "team": "ally",  "x": 0.30, "y": 0.68},
+    {"name": "ally_bot_t2",  "team": "ally",  "x": 0.18, "y": 0.78},
+    {"name": "enemy_top_t1", "team": "enemy", "x": 0.88, "y": 0.72},
+    {"name": "enemy_top_t2", "team": "enemy", "x": 0.80, "y": 0.82},
+    {"name": "enemy_mid_t1", "team": "enemy", "x": 0.72, "y": 0.55},
+    {"name": "enemy_mid_t2", "team": "enemy", "x": 0.62, "y": 0.65},
+    {"name": "enemy_bot_t1", "team": "enemy", "x": 0.70, "y": 0.32},
+    {"name": "enemy_bot_t2", "team": "enemy", "x": 0.80, "y": 0.22},
+]
+
+# Lord and Turtle pit positions on the minimap (normalized coords)
+_LORD_PIT: dict = {"x": 0.78, "y": 0.28}
+_TURTLE_PIT: dict = {"x": 0.52, "y": 0.68}
+
+# Turret detection parameters
+_TURRET_REGION_FRACTION = 0.04   # Half-width/height of sampling region relative to minimap
+_TURRET_DESTROY_RATIO = 0.50     # Brightness drops to < 50 % of baseline = destroyed
+_TURRET_MIN_BASELINE = 20.0      # Skip turrets whose baseline is too dark (icon not visible)
+
+# Objective (Lord/Turtle) detection parameters
+_OBJECTIVE_RADIUS = 0.15         # Normalised radius around pit to count as "near"
+_OBJECTIVE_MIN_HEROES = 2        # Minimum heroes near pit to register activity
+_OBJECTIVE_COOLDOWN_SEC = 30.0   # Seconds between repeated events for the same objective
+
 
 def _get_minimap_region(
     frame_width: int,
@@ -193,6 +224,127 @@ def _detect_events(timeline: list[dict]) -> list[dict]:
     return events
 
 
+def _sample_region_brightness(
+    minimap_bgr: np.ndarray,
+    norm_x: float,
+    norm_y: float,
+    region_fraction: float,
+) -> float:
+    """Return the mean pixel brightness of a small region around a minimap point.
+
+    Args:
+        minimap_bgr: BGR image of the cropped minimap region.
+        norm_x: Normalised x-coordinate of the centre point (0-1).
+        norm_y: Normalised y-coordinate of the centre point (0-1).
+        region_fraction: Half-width/height of the sampling region as a
+            fraction of the minimap dimensions.
+
+    Returns:
+        Mean grayscale brightness in [0, 255], or 0.0 for an empty region.
+    """
+    h, w = minimap_bgr.shape[:2]
+    rx = max(1, int(w * region_fraction))
+    ry = max(1, int(h * region_fraction))
+    cx = int(norm_x * w)
+    cy = int(norm_y * h)
+    x1 = max(0, cx - rx)
+    y1 = max(0, cy - ry)
+    x2 = min(w, cx + rx)
+    y2 = min(h, cy + ry)
+    region = minimap_bgr[y1:y2, x1:x2]
+    if region.size == 0:
+        return 0.0
+    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+    return float(np.mean(gray))
+
+
+def _detect_objective_events(
+    timeline: list[dict],
+    turret_baselines: dict[str, float],
+    turret_brightness_series: dict[str, list[tuple[float, float]]],
+) -> list[dict]:
+    """Detect turret-destruction and Lord/Turtle objective events.
+
+    Turret destruction is inferred when the mean brightness of a turret's
+    pixel region drops to less than *_TURRET_DESTROY_RATIO* of its baseline
+    (the brightness recorded in the first sampled frame).
+
+    Lord/Turtle events are inferred when *_OBJECTIVE_MIN_HEROES* or more
+    hero dots appear within *_OBJECTIVE_RADIUS* of the pit position.
+
+    Args:
+        timeline: List of frame entries from the hero-tracking pass, each
+            with 'time' and 'positions'.
+        turret_baselines: Mapping of turret name → baseline brightness.
+        turret_brightness_series: Mapping of turret name → list of
+            (timestamp, brightness) pairs recorded during tracking.
+
+    Returns:
+        Sorted list of objective event dicts:
+        ``{'time': float, 'event': str, 'team': str, 'position': dict}``.
+        Event type is one of ``'turret_destroyed'``, ``'lord_taken'``,
+        ``'turtle_taken'``.
+    """
+    events: list[dict] = []
+
+    # --- Turret destruction detection ---
+    for turret in _TURRET_POSITIONS:
+        name = turret["name"]
+        baseline = turret_baselines.get(name)
+        series = turret_brightness_series.get(name, [])
+        if baseline is None or baseline < _TURRET_MIN_BASELINE:
+            continue  # no reliable baseline for this turret
+
+        destroyed_threshold = baseline * _TURRET_DESTROY_RATIO
+        already_destroyed = False
+        for timestamp, brightness in series:
+            if not already_destroyed and brightness < destroyed_threshold:
+                events.append({
+                    "time": timestamp,
+                    "event": "turret_destroyed",
+                    "team": turret["team"],
+                    "position": {"x": turret["x"], "y": turret["y"]},
+                })
+                already_destroyed = True  # report each turret at most once
+
+    # --- Lord / Turtle activity detection ---
+    last_lord_time: float = -_OBJECTIVE_COOLDOWN_SEC
+    last_turtle_time: float = -_OBJECTIVE_COOLDOWN_SEC
+
+    for entry in timeline:
+        t = entry["time"]
+        positions = entry.get("positions", [])
+
+        for pit_name, pit, event_type in [
+            ("lord", _LORD_PIT, "lord_taken"),
+            ("turtle", _TURTLE_PIT, "turtle_taken"),
+        ]:
+            last_time = last_lord_time if pit_name == "lord" else last_turtle_time
+            if t - last_time < _OBJECTIVE_COOLDOWN_SEC:
+                continue
+
+            nearby = sum(
+                1
+                for p in positions
+                if (p["x"] - pit["x"]) ** 2 + (p["y"] - pit["y"]) ** 2
+                <= _OBJECTIVE_RADIUS ** 2
+            )
+            if nearby >= _OBJECTIVE_MIN_HEROES:
+                events.append({
+                    "time": t,
+                    "event": event_type,
+                    "team": "unknown",
+                    "position": {"x": pit["x"], "y": pit["y"]},
+                })
+                if pit_name == "lord":
+                    last_lord_time = t
+                else:
+                    last_turtle_time = t
+
+    events.sort(key=lambda e: e["time"])
+    return events
+
+
 def track_minimap(
     video_path: str,
     minimap_config: dict | None = None,
@@ -223,6 +375,9 @@ def track_minimap(
               {'x': float, 'y': float, 'team': str}} sorted by time.
             - 'events': list of {'time': float, 'type': str,
               'description': str} for detected ganks/rotations.
+            - 'objective_events': list of {'time': float, 'event': str,
+              'team': str, 'position': {'x': float, 'y': float}} for
+              detected turret destructions and Lord/Turtle events.
             - 'minimap_region': {'x': int, 'y': int, 'width': int,
               'height': int} pixel bounds used for analysis.
 
@@ -259,6 +414,12 @@ def track_minimap(
     timeline: list[dict] = []
     frame_idx = 0
 
+    # Turret tracking state: baseline brightness per turret + full series
+    turret_baselines: dict[str, float] = {}
+    turret_brightness_series: dict[str, list[tuple[float, float]]] = {
+        t["name"]: [] for t in _TURRET_POSITIONS
+    }
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -285,15 +446,29 @@ def track_minimap(
             if positions:
                 timeline.append({"time": timestamp, "positions": positions})
 
+            # Sample turret pixel regions for objective detection
+            for turret in _TURRET_POSITIONS:
+                name = turret["name"]
+                brightness = _sample_region_brightness(
+                    minimap, turret["x"], turret["y"], _TURRET_REGION_FRACTION
+                )
+                if name not in turret_baselines:
+                    turret_baselines[name] = brightness
+                turret_brightness_series[name].append((timestamp, brightness))
+
         frame_idx += 1
 
     cap.release()
 
     events = _detect_events(timeline)
+    objective_events = _detect_objective_events(
+        timeline, turret_baselines, turret_brightness_series
+    )
 
     return {
         "timeline": timeline,
         "events": events,
+        "objective_events": objective_events,
         "minimap_region": {"x": mm_x, "y": mm_y, "width": mm_w, "height": mm_h},
     }
 
