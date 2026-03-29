@@ -374,3 +374,197 @@ class TestCLI:
             assert exc_info.value.code == 1
         finally:
             sys.argv = old_argv
+
+
+# ---------------------------------------------------------------------------
+# Tests — _sample_region_brightness
+# ---------------------------------------------------------------------------
+
+
+class TestSampleRegionBrightness:
+    def test_black_region_returns_zero(self):
+        black = np.zeros((100, 100, 3), dtype=np.uint8)
+        result = minimap_tracker._sample_region_brightness(black, 0.5, 0.5, 0.1)
+        assert result == 0.0
+
+    def test_white_region_returns_high_value(self):
+        white = np.full((100, 100, 3), 255, dtype=np.uint8)
+        result = minimap_tracker._sample_region_brightness(white, 0.5, 0.5, 0.1)
+        assert result > 200.0
+
+    def test_corner_coords_do_not_crash(self):
+        white = np.full((100, 100, 3), 255, dtype=np.uint8)
+        result = minimap_tracker._sample_region_brightness(white, 0.0, 0.0, 0.1)
+        assert result >= 0.0
+        result2 = minimap_tracker._sample_region_brightness(white, 1.0, 1.0, 0.1)
+        assert result2 >= 0.0
+
+    def test_returns_float(self):
+        img = np.zeros((50, 50, 3), dtype=np.uint8)
+        result = minimap_tracker._sample_region_brightness(img, 0.5, 0.5, 0.05)
+        assert isinstance(result, float)
+
+
+# ---------------------------------------------------------------------------
+# Tests — _detect_objective_events
+# ---------------------------------------------------------------------------
+
+
+class TestDetectObjectiveEvents:
+    def test_empty_inputs_return_no_events(self):
+        events = minimap_tracker._detect_objective_events([], {}, {})
+        assert events == []
+
+    def test_turret_destruction_detected_on_brightness_drop(self):
+        turret = minimap_tracker._TURRET_POSITIONS[0]
+        name = turret["name"]
+        baselines = {name: 100.0}
+        # brightness drops to 40 % of baseline at t=10s → below 50 % threshold
+        series = {name: [(5.0, 95.0), (10.0, 38.0)]}
+        events = minimap_tracker._detect_objective_events([], baselines, series)
+        assert len(events) == 1
+        assert events[0]["event"] == "turret_destroyed"
+        assert events[0]["team"] == turret["team"]
+        assert events[0]["time"] == 10.0
+
+    def test_turret_not_destroyed_when_brightness_stable(self):
+        turret = minimap_tracker._TURRET_POSITIONS[0]
+        name = turret["name"]
+        baselines = {name: 100.0}
+        series = {name: [(5.0, 95.0), (10.0, 90.0)]}
+        events = minimap_tracker._detect_objective_events([], baselines, series)
+        turret_events = [e for e in events if e["event"] == "turret_destroyed"]
+        assert turret_events == []
+
+    def test_turret_skipped_when_baseline_too_dark(self):
+        turret = minimap_tracker._TURRET_POSITIONS[0]
+        name = turret["name"]
+        # Baseline below _TURRET_MIN_BASELINE → should not track
+        baselines = {name: 5.0}
+        series = {name: [(5.0, 1.0)]}
+        events = minimap_tracker._detect_objective_events([], baselines, series)
+        assert events == []
+
+    def test_turret_destroyed_at_most_once(self):
+        turret = minimap_tracker._TURRET_POSITIONS[0]
+        name = turret["name"]
+        baselines = {name: 100.0}
+        # Two consecutive drops — only the first should be reported
+        series = {name: [(5.0, 30.0), (10.0, 20.0)]}
+        events = minimap_tracker._detect_objective_events([], baselines, series)
+        turret_events = [e for e in events if e["event"] == "turret_destroyed"]
+        assert len(turret_events) == 1
+
+    def test_lord_event_detected_on_hero_clustering(self):
+        pit = minimap_tracker._LORD_PIT
+        timeline = [
+            {
+                "time": 60.0,
+                "positions": [
+                    {"x": pit["x"] + 0.02, "y": pit["y"] + 0.02, "team": "ally"},
+                    {"x": pit["x"] - 0.02, "y": pit["y"] - 0.02, "team": "enemy"},
+                ],
+            }
+        ]
+        events = minimap_tracker._detect_objective_events(timeline, {}, {})
+        lord_events = [e for e in events if e["event"] == "lord_taken"]
+        assert len(lord_events) == 1
+        assert lord_events[0]["time"] == 60.0
+
+    def test_turtle_event_detected_on_hero_clustering(self):
+        pit = minimap_tracker._TURTLE_PIT
+        timeline = [
+            {
+                "time": 90.0,
+                "positions": [
+                    {"x": pit["x"] + 0.01, "y": pit["y"], "team": "ally"},
+                    {"x": pit["x"], "y": pit["y"] + 0.01, "team": "ally"},
+                ],
+            }
+        ]
+        events = minimap_tracker._detect_objective_events(timeline, {}, {})
+        turtle_events = [e for e in events if e["event"] == "turtle_taken"]
+        assert len(turtle_events) == 1
+
+    def test_objective_cooldown_prevents_duplicate_events(self):
+        pit = minimap_tracker._TURTLE_PIT
+        timeline = [
+            {
+                "time": 0.0,
+                "positions": [
+                    {"x": pit["x"], "y": pit["y"], "team": "ally"},
+                    {"x": pit["x"], "y": pit["y"], "team": "enemy"},
+                ],
+            },
+            {
+                "time": 5.0,
+                "positions": [
+                    {"x": pit["x"], "y": pit["y"], "team": "ally"},
+                    {"x": pit["x"], "y": pit["y"], "team": "enemy"},
+                ],
+            },
+        ]
+        events = minimap_tracker._detect_objective_events(timeline, {}, {})
+        turtle_events = [e for e in events if e["event"] == "turtle_taken"]
+        assert len(turtle_events) == 1
+
+    def test_objective_events_sorted_by_time(self):
+        turret = minimap_tracker._TURRET_POSITIONS[0]
+        pit = minimap_tracker._TURTLE_PIT
+        baselines = {turret["name"]: 100.0}
+        series = {turret["name"]: [(50.0, 30.0)]}
+        timeline = [
+            {
+                "time": 10.0,
+                "positions": [
+                    {"x": pit["x"], "y": pit["y"], "team": "ally"},
+                    {"x": pit["x"], "y": pit["y"], "team": "enemy"},
+                ],
+            }
+        ]
+        events = minimap_tracker._detect_objective_events(timeline, baselines, series)
+        times = [e["time"] for e in events]
+        assert times == sorted(times)
+
+    def test_objective_event_structure(self):
+        pit = minimap_tracker._LORD_PIT
+        timeline = [
+            {
+                "time": 120.0,
+                "positions": [
+                    {"x": pit["x"], "y": pit["y"], "team": "ally"},
+                    {"x": pit["x"], "y": pit["y"], "team": "ally"},
+                ],
+            }
+        ]
+        events = minimap_tracker._detect_objective_events(timeline, {}, {})
+        assert len(events) >= 1
+        for e in events:
+            assert "time" in e
+            assert "event" in e
+            assert "team" in e
+            assert "position" in e
+            assert "x" in e["position"]
+            assert "y" in e["position"]
+
+
+# ---------------------------------------------------------------------------
+# Tests — track_minimap includes objective_events
+# ---------------------------------------------------------------------------
+
+
+class TestTrackMinimapObjectiveEvents:
+    def test_result_contains_objective_events_key(self, blank_video):
+        result = minimap_tracker.track_minimap(blank_video, sample_fps=5.0)
+        assert "objective_events" in result
+        assert isinstance(result["objective_events"], list)
+
+    def test_cli_output_contains_objective_events(self, blank_video, capsys):
+        old_argv = sys.argv
+        sys.argv = ["minimap_tracker.py", "--video", blank_video, "--sample-fps", "5"]
+        try:
+            minimap_tracker.main()
+        finally:
+            sys.argv = old_argv
+        data = json.loads(capsys.readouterr().out)
+        assert "objective_events" in data
