@@ -268,8 +268,9 @@ def _combine_events(events: list[dict], cooldown_sec: float) -> list[dict]:
 
     Single-pass merge over time-sorted events. When events fall within
     the cooldown window they are merged: audio events take priority for
-    type classification, scores are boosted once when multiple distinct
-    sources are present, and sources are combined.
+    type classification, followed by explicit kill-feed events. Scores are
+    boosted once when multiple distinct sources are present, and sources
+    are combined.
     """
     if not events:
         return []
@@ -288,12 +289,17 @@ def _combine_events(events: list[dict], cooldown_sec: float) -> list[dict]:
             )
             # Combine sources
             cur_sources = current.get("sources") or []
-            for src in event.get("sources") or []:
+            event_sources = event.get("sources") or []
+            current_has_audio = "audio" in cur_sources
+            for src in event_sources:
                 if src not in cur_sources:
                     cur_sources.append(src)
             current["sources"] = cur_sources
-            # Audio events provide the most reliable type
-            if "audio" in (event.get("sources") or []):
+            # Audio events provide the most reliable type. Kill-feed OCR is
+            # more specific than generic frame/color/volume classifications.
+            if "audio" in event_sources:
+                current["type"] = event["type"]
+            elif "killfeed" in event_sources and not current_has_audio:
                 current["type"] = event["type"]
         else:
             # Finalize current cluster: boost if multiple sources

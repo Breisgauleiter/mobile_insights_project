@@ -289,7 +289,7 @@ class TestMultiSignalIntegration:
         )
         kill_events = [h for h in results if h.get("type") == "kill"]
         assert len(kill_events) >= 1
-        assert kill_events[0]["sources"] == ["killfeed"]
+        assert "killfeed" in kill_events[0]["sources"]
 
     def test_kills_out_populated_from_killfeed(self, activity_video, monkeypatch):
         """kills_out list is populated with raw kill events from detect_killfeed."""

@@ -53,7 +53,7 @@ mobile_insights_project/
     color_detector.py        – Farb-Burst-Detektor
     requirements.txt         – Python-Abhängigkeiten
     tests/                   – pytest-Tests
-  mobile_app/                – Platzhalter für die mobile App
+  mobile_app/                – React-Native-App für Uploads und Ergebnisse
 ```
 
 ## Schnellstart (Docker)
@@ -181,9 +181,11 @@ Das Repository enthält zwei GitHub-Actions-Workflows:
 
 | Workflow | Trigger | Aufgaben |
 |---------|---------|---------|
-| **Server CI** (`.github/workflows/server-ci.yml`) | Push/PR auf `main`, Pfad `server/**` | ESLint, Jest-Tests (Node.js 18 & 20) |
+| **Server CI** (`.github/workflows/server-ci.yml`) | Push/PR auf `main`, Pfad `server/**` | ESLint, Jest-Tests (Node.js 22 & 24) |
 | **ML Pipeline CI** (`.github/workflows/ml-ci.yml`) | Push/PR auf `main`, Pfad `ml/**` | ruff-Linting, pytest (Python 3.11 & 3.12) |
 
-## Hinweis zur mobilen App
+## Mobile App
 
-Die mobile App (`mobile_app/`) ist derzeit noch ein Platzhalter. Sie soll als React-Native-App native Bildschirmaufnahme (MediaProjection/ReplayKit) und den Upload an den Server ermöglichen.
+Die React-Native-App (`mobile_app/`) unterstützt bereits Videoauswahl und Upload,
+eine Liste der verarbeiteten Uploads sowie die Anzeige erkannter Highlights.
+Native Bildschirmaufnahme über MediaProjection/ReplayKit ist noch nicht umgesetzt.

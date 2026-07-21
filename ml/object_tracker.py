@@ -92,7 +92,11 @@ def track_object(
 
         tracker = _create_csrt_tracker()
         x, y, w, h = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-        if not tracker.init(init_frame, (x, y, w, h)):
+        # OpenCV bindings differ here: some versions return True on success,
+        # while newer contrib builds return None and only return False for an
+        # explicit initialization failure.
+        init_result = tracker.init(init_frame, (x, y, w, h))
+        if init_result is False:
             raise RuntimeError(
                 "Tracker initialization failed. "
                 "The bounding box may be outside the frame boundaries."

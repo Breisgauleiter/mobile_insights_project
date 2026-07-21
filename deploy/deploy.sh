@@ -53,6 +53,8 @@ cmd_deploy() {
         --exclude 'node_modules' \
         --exclude '.venv' \
         --exclude '__pycache__' \
+        --exclude '.pytest_cache' \
+        --exclude '.ruff_cache' \
         --exclude '.git' \
         --exclude 'server/uploads' \
         --exclude 'server/__tests__' \

@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:24-slim
 
 # Install Python 3 and OpenCV system dependencies
 RUN apt-get update && \

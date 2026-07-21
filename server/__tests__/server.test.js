@@ -618,7 +618,6 @@ describe('POST /minimap-analysis', () => {
 
 describe('POST /track', () => {
   const testVideo = 'track-test-video.mp4';
-  const tracksDir = app._tracksDir;
 
   beforeEach(() => {
     cleanUploads();

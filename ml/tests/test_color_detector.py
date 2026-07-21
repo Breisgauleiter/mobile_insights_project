@@ -78,6 +78,7 @@ class TestDetectColorBursts:
         skipped = color_detector.detect_color_bursts(
             red_flash_video, burst_threshold=1.5, skip_frames=3,
         )
+        assert isinstance(full, list)
         assert isinstance(skipped, list)
 
     def test_max_width(self, red_flash_video):

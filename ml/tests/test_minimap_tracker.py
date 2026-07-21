@@ -99,7 +99,7 @@ class TestGetMinimapRegion:
         x, y, w, h = minimap_tracker._get_minimap_region(320, 240, None)
         size = int(min(320, 240) * minimap_tracker._DEFAULT_MINIMAP_FRACTION)
         assert x == 0
-        assert y == 240 - size
+        assert y == 0
         assert w == size
         assert h == size
 
@@ -117,7 +117,7 @@ class TestGetMinimapRegion:
         x, y, w, h = minimap_tracker._get_minimap_region(640, 480, config)
         size = int(min(640, 480) * minimap_tracker._DEFAULT_MINIMAP_FRACTION)
         assert x == 0
-        assert y == 480 - size
+        assert y == 0
         assert w == size
         assert h == size
 
@@ -145,9 +145,10 @@ class TestFindDots:
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         result = minimap_tracker._find_dots(hsv, "ally", 5, 1000)
         assert len(result) >= 1
-        cx, cy = result[0]
+        cx, cy, area = result[0]
         assert 0.0 <= cx <= 1.0
         assert 0.0 <= cy <= 1.0
+        assert area > 0
 
     def test_enemy_dot_detected(self):
         img = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -176,9 +177,10 @@ class TestFindDots:
         cv2.circle(img, (25, 75), 6, _ENEMY_BGR, -1)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         result = minimap_tracker._find_dots(hsv, "enemy", 5, 1000)
-        for x, y in result:
+        for x, y, area in result:
             assert 0.0 <= x <= 1.0
             assert 0.0 <= y <= 1.0
+            assert area > 0
 
 
 # ---------------------------------------------------------------------------

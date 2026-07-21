@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Simple Express server for mobile insights MVP",
   "main": "index.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node index.js",
     "test": "jest --verbose",
