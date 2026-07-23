@@ -11,7 +11,7 @@ MVP-Prototyp zur automatischen Highlight-Erkennung in Gameplay-Videos. Videos we
 - **Web-UI** — Drag-and-Drop-Upload, Echtzeit-Fortschrittsanzeige, Video-Player mit Highlight-Navigation
 - **Fortschrittsverfolgung** — der Server streamt den ML-Fortschritt live an den Browser (0–100 % pro Stage, ETA-Anzeige)
 - **Docker-Deployment** — einzelnes Image für Server und ML-Pipeline; Produktionsstack hinter Traefik mit HTTPS
-- **CI/CD** — GitHub Actions für Server (Node.js 18/20) und ML-Pipeline (Python 3.11/3.12)
+- **Manuelles Deployment** — lokale Prüfungen und SSH/Docker-Deployment auf den Produktionsserver
 
 ## Architektur
 
@@ -175,14 +175,22 @@ bash deploy/deploy.sh stop      # Stack stoppen
 bash deploy/deploy.sh cleanup   # Alte Docker-Images löschen
 ```
 
-## CI/CD
+## Prüfung und Deployment
 
-Das Repository enthält zwei GitHub-Actions-Workflows:
+GitHub Actions werden nicht verwendet. Vor einem Deployment werden die
+Prüfungen manuell ausgeführt:
 
-| Workflow | Trigger | Aufgaben |
-|---------|---------|---------|
-| **Server CI** (`.github/workflows/server-ci.yml`) | Push/PR auf `main`, Pfad `server/**` | ESLint, Jest-Tests (Node.js 22 & 24) |
-| **ML Pipeline CI** (`.github/workflows/ml-ci.yml`) | Push/PR auf `main`, Pfad `ml/**` | ruff-Linting, pytest (Python 3.11 & 3.12) |
+```bash
+(cd server && npm test -- --runInBand && npm run lint)
+(cd mobile_app && npm test -- --runInBand && npm run lint && npx tsc --noEmit)
+(cd ml && python3 -m pytest tests -q && ruff check .)
+```
+
+Danach wird der Produktionscontainer aktualisiert:
+
+```bash
+bash deploy/deploy.sh deploy
+```
 
 ## Mobile App
 

@@ -43,11 +43,11 @@ Das Ziel: Spielaufnahmen mobil aufnehmen, an einen Server senden und per ML-Pipe
 ## Workflow
 - Issues beschreiben Aufgaben – Agents arbeiten diese ab
 - Jede Änderung kommt über einen Feature-Branch + PR
-- CI muss grün sein bevor gemergt wird
-- PR-Zyklus: Agent PR → Copilot Review → Fixes → Merge
+- Lokale Checks müssen vor dem Deployment erfolgreich sein
+- PR-Zyklus: Agent PR → Review → Fixes → Merge
 
 ## Wichtige Pfade
 - Server-Einstiegspunkt: `server/index.js`
 - ML-Einstiegspunkt: `ml/highlight_detector.py`
-- CI/CD: `.github/workflows/`
+- Deployment: `deploy/deploy.sh` und `docker-compose.prod.yml`
 - Issue Templates: `.github/ISSUE_TEMPLATE/`
