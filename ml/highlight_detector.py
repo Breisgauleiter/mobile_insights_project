@@ -152,12 +152,13 @@ def detect_highlights(
     enable_killfeed: bool = True,
     debug: bool = False,
     kills_out: list[dict] | None = None,
+    objective_events: list[dict] | None = None,
 ) -> list[dict]:
     """Run the multi-signal highlight detection pipeline.
 
-    Combines frame-difference, color-burst, audio event, volume-based, and
-    kill-feed OCR detectors into a single ranked list of highlights with
-    event-type classification.
+    Combines frame-difference, color-burst, audio event, volume-based,
+    kill-feed OCR, and optional minimap objective event detectors into a
+    single ranked list of highlights with event-type classification.
 
     Args:
         video_path: Path to the video file.
@@ -176,6 +177,10 @@ def detect_highlights(
             ``{time, killer, victim}`` detected by the kill-feed OCR step.
             Pass an empty list to receive structured kill data without a
             second call to ``detect_killfeed``.
+        objective_events: Optional list of objective events produced by the
+            minimap tracker (turret destructions, Lord/Turtle takes).  Each
+            entry must have a ``'time'`` key.  Passed events are scored at
+            80.0 with type ``'objective'`` and source ``'minimap'``.
 
     Returns:
         List of dicts with 'timestamp', 'score', 'type', and 'sources'.
@@ -252,6 +257,16 @@ def detect_highlights(
                 })
         except (ImportError, FileNotFoundError, RuntimeError, OSError) as exc:
             print(f"[warn] Kill-feed detection skipped: {exc}", file=sys.stderr)
+
+    # 6. Objective events (turret/Lord/Turtle from minimap analysis)
+    if objective_events:
+        for oe in objective_events:
+            all_events.append({
+                "timestamp": oe["time"],
+                "score": 80.0,
+                "type": "objective",
+                "sources": ["minimap"],
+            })
 
     _report_progress(100, "done")
 
